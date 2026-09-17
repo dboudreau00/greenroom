@@ -1,0 +1,22 @@
+[Unit]
+Description=Greenroom demo environment portal
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=greenroom
+Group=greenroom
+SupplementaryGroups=docker
+WorkingDirectory=/opt/greenroom
+EnvironmentFile=-/etc/greenroom/env
+ExecStart=/usr/local/bin/greenroom -C /opt/greenroom serve --listen 0.0.0.0:8470
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/greenroom/state
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

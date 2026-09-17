@@ -1,0 +1,21 @@
+{
+  "persona": "cfo",
+  "version": 2,
+  "title": "CFO persona: quarter-end close",
+  "description": "Eight customers, twelve orders, invoices, and the quarter_close view the finance dashboard reads. This is the set the pin points at.",
+  "vertical": "fintech",
+  "author": "sales-engineering",
+  "tags": ["finance", "dashboard"],
+  "steps": [
+    { "name": "schema", "kind": "sql", "dependency": "postgres", "file": "001_schema.sql" },
+    { "name": "data", "kind": "sql", "dependency": "postgres", "file": "002_data.sql" },
+    { "name": "views", "kind": "sql", "dependency": "postgres", "file": "003_views.sql" },
+    { "name": "cache-flush", "kind": "command", "target": "docker", "container": "acme-demo-cache", "command": ["redis-cli", "FLUSHALL"], "continueOnError": true },
+    { "name": "warm-web", "kind": "http", "url": "${ACME_WEB_URL:-http://127.0.0.1:8090/}", "expectStatus": 200, "continueOnError": true }
+  ],
+  "verify": [
+    { "name": "orders", "kind": "sql", "dependency": "postgres", "query": "SELECT count(*) FROM orders", "expect": 12 },
+    { "name": "customers", "kind": "sql", "dependency": "postgres", "query": "SELECT count(*) FROM customers", "expect": 8 },
+    { "name": "quarter-close-rows", "kind": "sql", "dependency": "postgres", "query": "SELECT count(*) FROM quarter_close", "min": 1 }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "persona": "cfo",
+  "version": 1,
+  "title": "CFO persona: first cut",
+  "description": "Six customers and ten orders, enough for the revenue dashboard walkthrough.",
+  "vertical": "fintech",
+  "author": "sales-engineering",
+  "steps": [
+    { "name": "schema", "kind": "sql", "dependency": "postgres", "file": "001_schema.sql" },
+    { "name": "data", "kind": "sql", "dependency": "postgres", "file": "002_data.sql" },
+    { "name": "cache-flush", "kind": "command", "target": "docker", "container": "acme-demo-cache", "command": ["redis-cli", "FLUSHALL"], "continueOnError": true }
+  ],
+  "verify": [
+    { "name": "orders", "kind": "sql", "dependency": "postgres", "query": "SELECT count(*) FROM orders", "expect": 10 },
+    { "name": "customers", "kind": "sql", "dependency": "postgres", "query": "SELECT count(*) FROM customers", "expect": 6 }
+  ]
+}

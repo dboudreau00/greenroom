@@ -1,0 +1,77 @@
+{
+  // Acme demo: a Postgres database, a Redis cache and a static web front
+  // end, all run by docker-compose.yml next to this file. Ports and the DSN
+  // can be overridden with environment variables.
+  "name": "acme-demo",
+  "title": "Acme demo (local Docker)",
+  "owner": "sales-engineering",
+  "description": "Postgres + Redis + web served from docker-compose.yml. Two personas: cfo (quarter-end close) and retail-ops (store inventory).",
+  "staleAfter": "72h",
+  "pin": { "persona": "cfo", "version": 2 },
+  "env": {
+    "ACME_PG_DSN": "postgres://demo:demo@127.0.0.1:5477/demo?sslmode=disable"
+  },
+  "targets": {
+    "docker": { "kind": "docker", "host": "${DOCKER_HOST:-unix:///var/run/docker.sock}" },
+    "local": { "kind": "local" }
+  },
+  "dependencies": [
+    {
+      "name": "postgres",
+      "title": "Demo database (Postgres 16)",
+      "kind": "postgres",
+      "dsn": "${ACME_PG_DSN}",
+      "critical": true,
+      "reset": { "strategy": "template", "template": "demo_golden" },
+      "snapshot": { "strategy": "template", "template": "demo_golden" },
+      "drift": [
+        { "name": "orders", "query": "SELECT count(*) FROM orders" },
+        { "name": "customers", "query": "SELECT count(*) FROM customers" },
+        { "name": "sessions", "query": "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()", "max": 25 }
+      ]
+    },
+    {
+      "name": "db-container",
+      "title": "Database container",
+      "kind": "docker",
+      "target": "docker",
+      "container": "acme-demo-db",
+      "critical": true,
+      "heal": { "action": "start" },
+      "autoHeal": true
+    },
+    {
+      "name": "cache",
+      "title": "Redis cache",
+      "kind": "docker",
+      "target": "docker",
+      "container": "acme-demo-cache",
+      "reset": { "strategy": "restart" },
+      "heal": { "action": "restart" },
+      "autoHeal": true
+    },
+    {
+      "name": "web",
+      "title": "Web front end",
+      "kind": "http",
+      "url": "${ACME_WEB_URL:-http://127.0.0.1:8090/}",
+      "expectStatus": 200,
+      "expectBody": "Acme",
+      "critical": true
+    },
+    {
+      "name": "web-container",
+      "title": "Web container",
+      "kind": "docker",
+      "target": "docker",
+      "container": "acme-demo-web",
+      "heal": { "action": "restart" }
+    },
+    {
+      "name": "db-port",
+      "title": "Database port reachable",
+      "kind": "tcp",
+      "address": "${ACME_PG_ADDR:-127.0.0.1:5477}"
+    }
+  ]
+}

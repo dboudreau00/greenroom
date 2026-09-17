@@ -1,0 +1,18 @@
+{
+  "persona": "retail-ops",
+  "version": 1,
+  "title": "Retail operations: store inventory",
+  "description": "Three stores with inventory levels and eight orders, for the low-stock alert walkthrough.",
+  "vertical": "retail",
+  "author": "sales-engineering",
+  "tags": ["inventory", "alerts"],
+  "steps": [
+    { "name": "schema", "kind": "sql", "dependency": "postgres", "file": "001_schema.sql" },
+    { "name": "data", "kind": "sql", "dependency": "postgres", "file": "002_data.sql" },
+    { "name": "cache-flush", "kind": "command", "target": "docker", "container": "acme-demo-cache", "command": ["redis-cli", "FLUSHALL"], "continueOnError": true }
+  ],
+  "verify": [
+    { "name": "orders", "kind": "sql", "dependency": "postgres", "query": "SELECT count(*) FROM orders", "expect": 8 },
+    { "name": "low-stock", "kind": "sql", "dependency": "postgres", "query": "SELECT count(*) FROM inventory WHERE on_hand < reorder_point", "min": 1 }
+  ]
+}

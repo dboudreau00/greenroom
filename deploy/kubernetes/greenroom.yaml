@@ -1,0 +1,174 @@
+# Greenroom on Kubernetes (plain manifests, works on EKS, GKE, AKS, kind).
+#
+#   kubectl create namespace greenroom
+#   kubectl -n greenroom create secret generic greenroom --from-literal=token="$(openssl rand -hex 24)"
+#   kubectl -n greenroom create configmap greenroom-workspace --from-file=greenroom.json --from-file=environments/   # or use a git-sync sidecar
+#   kubectl apply -f deploy/kubernetes/greenroom.yaml
+#
+# The in-cluster target needs no kubeconfig: set "kubeconfig": "in-cluster"
+# on the kubernetes target and the pod's service account token is used.
+# The Role below is scoped to the demo namespace; widen it or add more
+# RoleBindings for every namespace Greenroom manages.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: greenroom
+  namespace: greenroom
+  # EKS with IRSA: uncomment and point at the role that holds iam-policy.json.
+  # annotations:
+  #   eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/greenroom
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: greenroom
+  namespace: demo
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "patch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: greenroom
+  namespace: demo
+subjects:
+  - kind: ServiceAccount
+    name: greenroom
+    namespace: greenroom
+roleRef:
+  kind: Role
+  name: greenroom
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: greenroom-state
+  namespace: greenroom
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: greenroom
+  namespace: greenroom
+  labels:
+    app: greenroom
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: greenroom
+  template:
+    metadata:
+      labels:
+        app: greenroom
+    spec:
+      serviceAccountName: greenroom
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        fsGroup: 101
+      containers:
+        - name: greenroom
+          image: ghcr.io/dboudreau00/greenroom:latest
+          args: ["serve"]
+          env:
+            - name: GREENROOM_LISTEN
+              value: 0.0.0.0:8470
+            - name: GREENROOM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: greenroom
+                  key: token
+            # Database DSNs referenced as ${VAR} in environment.json:
+            # - name: DEMO_PG_DSN
+            #   valueFrom: { secretKeyRef: { name: demo-db, key: dsn } }
+          ports:
+            - name: http
+              containerPort: 8470
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace/greenroom.json
+              subPath: greenroom.json
+              readOnly: true
+            - name: workspace
+              mountPath: /workspace/environments
+              readOnly: true
+            - name: state
+              mountPath: /workspace/state
+      volumes:
+        - name: workspace
+          configMap:
+            name: greenroom-workspace
+        - name: state
+          persistentVolumeClaim:
+            claimName: greenroom-state
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: greenroom
+  namespace: greenroom
+spec:
+  selector:
+    app: greenroom
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: greenroom
+  namespace: greenroom
+  annotations:
+    # Server-sent events need buffering off on nginx ingress.
+    nginx.ingress.kubernetes.io/proxy-buffering: "false"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+spec:
+  rules:
+    - host: greenroom.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: greenroom
+                port:
+                  name: http

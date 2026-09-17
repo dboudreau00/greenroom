@@ -1,0 +1,16 @@
+# build output
+/build/
+/dist/
+*.exe
+*.test
+*.out
+
+# workspace state created when running greenroom from the repo root
+/state/
+/examples/state/
+
+# editor and OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

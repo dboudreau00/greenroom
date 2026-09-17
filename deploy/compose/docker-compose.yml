@@ -1,0 +1,36 @@
+# Run the Greenroom portal with Docker Compose next to the demo stack it
+# watches. Mount the Docker socket so docker targets work, mount the
+# workspace (greenroom.json + environments/) read-only, and keep state on a
+# named volume.
+#
+#   GREENROOM_TOKEN=change-me docker compose -f deploy/compose/docker-compose.yml up -d
+#
+name: greenroom
+
+services:
+  greenroom:
+    image: ghcr.io/dboudreau00/greenroom:latest
+    build:
+      context: ../..
+    container_name: greenroom
+    environment:
+      GREENROOM_TOKEN: ${GREENROOM_TOKEN:?set GREENROOM_TOKEN}
+      GREENROOM_LISTEN: 0.0.0.0:8470
+      # Uncomment to hand AWS credentials to ec2 / ssm targets.
+      # AWS_REGION: us-east-1
+      # AWS_ACCESS_KEY_ID: ...
+      # AWS_SECRET_ACCESS_KEY: ...
+    ports:
+      - "${GREENROOM_PORT:-8470}:8470"
+    volumes:
+      - ${GREENROOM_WORKSPACE:-../../examples}/greenroom.json:/workspace/greenroom.json:ro
+      - ${GREENROOM_WORKSPACE:-../../examples}/environments:/workspace/environments:ro
+      - greenroom-state:/workspace/state
+      - /var/run/docker.sock:/var/run/docker.sock
+    # The container runs as an unprivileged user; give it the socket's group.
+    group_add:
+      - "${DOCKER_GID:-999}"
+    restart: unless-stopped
+
+volumes:
+  greenroom-state:

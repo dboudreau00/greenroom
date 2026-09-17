@@ -1,0 +1,45 @@
+name: acme-demo
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: acme-demo-db
+    environment:
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: demo
+      POSTGRES_DB: demo
+    ports:
+      - "${ACME_PG_PORT:-5477}:5432"
+    volumes:
+      - acme-demo-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demo -d demo"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  cache:
+    image: redis:7-alpine
+    container_name: acme-demo-cache
+    ports:
+      - "${ACME_REDIS_PORT:-6390}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  web:
+    image: nginx:alpine
+    container_name: acme-demo-web
+    ports:
+      - "${ACME_WEB_PORT:-8090}:80"
+    volumes:
+      - ./web:/usr/share/nginx/html:ro
+    restart: unless-stopped
+
+volumes:
+  acme-demo-pgdata:
+    name: acme-demo-pgdata

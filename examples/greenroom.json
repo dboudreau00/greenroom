@@ -1,0 +1,10 @@
+{
+  // Workspace file for the bundled example. Run from the repository root:
+  //   greenroom -C examples serve
+  "listen": "127.0.0.1:8470",
+  "environmentsDir": "environments",
+  "stateDir": "state",
+  "probeInterval": "60s",
+  "sampleRetention": "720h",
+  "healCooldown": "5m"
+}

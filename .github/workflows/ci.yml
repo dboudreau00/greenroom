@@ -1,0 +1,95 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: demo
+          POSTGRES_PASSWORD: demo
+          POSTGRES_DB: demo
+        ports: ["5477:5432"]
+        options: >-
+          --health-cmd "pg_isready -U demo -d demo"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./... -count=1
+        env:
+          GREENROOM_TEST_PG_DSN: postgres://demo:demo@127.0.0.1:5477/demo?sslmode=disable
+      - name: end to end against Docker and Postgres
+        run: |
+          set -euo pipefail
+          go build -o build/greenroom ./cmd/greenroom
+          rm -rf /tmp/ws && build/greenroom -C /tmp/ws init >/dev/null
+          cd /tmp/ws
+          docker compose -f environments/acme-demo/docker-compose.yml up -d
+          for i in $(seq 1 30); do docker inspect -f '{{.State.Health.Status}}' acme-demo-db 2>/dev/null | grep -q healthy && break; sleep 2; done
+          export ACME_PG_DSN="postgres://demo:demo@127.0.0.1:5477/demo?sslmode=disable"
+          # The workflow service also listens on 5477; the compose stack must win, so move it.
+          ACME_PG_PORT=5478 docker compose -f environments/acme-demo/docker-compose.yml up -d --force-recreate db
+          export ACME_PG_DSN="postgres://demo:demo@127.0.0.1:5478/demo?sslmode=disable" ACME_PG_ADDR=127.0.0.1:5478
+          for i in $(seq 1 30); do docker inspect -f '{{.State.Health.Status}}' acme-demo-db 2>/dev/null | grep -q healthy && break; sleep 2; done
+          $GITHUB_WORKSPACE/build/greenroom validate
+          $GITHUB_WORKSPACE/build/greenroom snapshot acme-demo postgres
+          $GITHUB_WORKSPACE/build/greenroom reset acme-demo --yes
+          $GITHUB_WORKSPACE/build/greenroom stale acme-demo
+          $GITHUB_WORKSPACE/build/greenroom check acme-demo
+          docker exec acme-demo-db psql -U demo -d demo -c "INSERT INTO orders (customer_id, amount_cents, status, placed_at) VALUES (1, 1, 'open', now())"
+          if $GITHUB_WORKSPACE/build/greenroom stale acme-demo; then echo "drift not detected"; exit 1; fi
+          $GITHUB_WORKSPACE/build/greenroom reset acme-demo --yes retail-ops@v1
+          $GITHUB_WORKSPACE/build/greenroom stale acme-demo || true
+          docker compose -f environments/acme-demo/docker-compose.yml down -v
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: cross compile
+        run: |
+          set -euo pipefail
+          VERSION=${GITHUB_REF_NAME}
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64 windows/amd64; do
+            os=${target%/*}; arch=${target#*/}
+            out=dist/greenroom-${os}-${arch}
+            [ "$os" = windows ] && out=$out.exe
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -ldflags "-s -w -X main.Version=${VERSION}" -o "$out" ./cmd/greenroom
+          done
+          (cd dist && sha256sum * > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: greenroom-binaries
+          path: dist/
+      - name: release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t greenroom:ci --build-arg VERSION=${GITHUB_SHA::7} .
+      - run: docker run --rm greenroom:ci version
