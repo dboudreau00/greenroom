@@ -70,7 +70,12 @@ func newFakeAPI(t *testing.T) (*httptest.Server, *fakeAPI) {
 			w.WriteHeader(400)
 			return
 		}
-		io.WriteString(w, `{"items":[{"metadata":{"name":"web-1","namespace":"demo","uid":"p1","creationTimestamp":"2026-09-01T00:00:00Z"},
+		// web-0 is a ready pod that is already terminating after a rollout; it
+		// must never be picked for exec.
+		io.WriteString(w, `{"items":[
+{"metadata":{"name":"web-0","namespace":"demo","uid":"p0","creationTimestamp":"2026-08-01T00:00:00Z","deletionTimestamp":"2026-09-01T00:00:05Z"},
+"spec":{"containers":[{"name":"web"}]},"status":{"phase":"Running","containerStatuses":[{"ready":true,"image":"nginx:1.27"}]}},
+{"metadata":{"name":"web-1","namespace":"demo","uid":"p1","creationTimestamp":"2026-09-01T00:00:00Z"},
 "spec":{"containers":[{"name":"web"}]},"status":{"phase":"Running","containerStatuses":[{"ready":true,"image":"nginx:1.27"}]}}]}`)
 	})
 	mux.HandleFunc("/api/v1/namespaces/demo/pods/web-1/exec", func(w http.ResponseWriter, r *http.Request) {
@@ -213,7 +218,7 @@ func TestExec(t *testing.T) {
 	fa.mu.Lock()
 	cmd = fa.execCmd
 	fa.mu.Unlock()
-	if strings.Join(cmd, " ") != "tar xf - -C /tmp" {
+	if strings.Join(cmd, " ") != "sh -c mkdir -p /tmp && tar xf - -C /tmp" {
 		t.Fatalf("copy command %v", cmd)
 	}
 }
@@ -224,6 +229,11 @@ func TestParseWorkloadKinds(t *testing.T) {
 	w := parseWorkload("daemonset", obj)
 	if w.Healthy() || w.Desired != 3 || w.Ready != 2 {
 		t.Fatalf("daemonset %+v", w)
+	}
+	json.Unmarshal([]byte(`{"metadata":{"name":"z","generation":4},"spec":{"replicas":0},"status":{"observedGeneration":4}}`), &obj)
+	w = parseWorkload("deployment", obj)
+	if w.Healthy() || !w.ScaledToZero() {
+		t.Fatalf("scaled to zero must be unhealthy: %+v", w)
 	}
 	json.Unmarshal([]byte(`{"metadata":{"name":"p","uid":"x"},"spec":{"containers":[{"name":"a"},{"name":"b"}]},"status":{"phase":"Running","containerStatuses":[{"ready":true},{"ready":false}]}}`), &obj)
 	w = parseWorkload("pod", obj)

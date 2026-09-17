@@ -47,7 +47,7 @@ func (e *Engine) StartReset(envName string, opts ResetOptions) (string, error) {
 	}
 	rec := e.newRun(v.Config.Name, state.RunReset, opts.Actor)
 	if err := e.acquire(v, rec.ID()); err != nil {
-		rec.Finish(err, "")
+		rec.discard()
 		return "", err
 	}
 	go func() {
@@ -221,7 +221,7 @@ func (e *Engine) runReset(ctx context.Context, v *Env, set *seeds.Set, opts Rese
 			rec.Info("record", "baseline %s.%s = %s", dep.Name, dc.Name, fmtNum(val))
 		}
 	}
-	applied.Duration = e.Now().Sub(start)
+	applied.Duration = max(e.Now().Sub(start), 0)
 	if err := e.store.SaveApplied(v.Config.Name, applied); err != nil {
 		rec.EndStep(idx, err, "")
 		return rec.Finish(err, "could not record the applied state")
@@ -391,7 +391,8 @@ func (e *Engine) resetMySQL(ctx context.Context, v *Env, dep config.Dependency, 
 			return "", err
 		}
 		rec.Info(step, "dropping and recreating database %s", db)
-		sql := fmt.Sprintf("DROP DATABASE IF EXISTS `%s`; CREATE DATABASE `%s`;", db, db)
+		q := "`" + strings.ReplaceAll(db, "`", "``") + "`"
+		sql := fmt.Sprintf("DROP DATABASE IF EXISTS %s; CREATE DATABASE %s;", q, q)
 		return "database " + db + " recreated", runner.Exec(ctx, sql, rec.Sink(step))
 	case "script":
 		b, err := os.ReadFile(filepath.Join(v.Config.Dir, filepath.FromSlash(dep.Reset.Script)))

@@ -516,13 +516,21 @@ type Workload struct {
 	Message            string            `json:"message,omitempty"`
 }
 
-// Healthy reports whether the workload has every desired replica ready.
+// Healthy reports whether the workload has every desired replica ready. A
+// workload scaled to zero is not healthy: for a demo dependency, nothing
+// running is the failure this check exists to catch.
 func (w *Workload) Healthy() bool {
 	if w.Kind == "pod" {
 		return w.Phase == "Running" && w.Ready >= w.Desired
 	}
+	if w.Desired == 0 {
+		return false
+	}
 	return w.Desired == w.Ready && (w.Kind == "daemonset" || w.Updated >= w.Desired) && w.ObservedGeneration >= w.Generation
 }
+
+// ScaledToZero reports a workload with no desired replicas.
+func (w *Workload) ScaledToZero() bool { return w.Kind != "pod" && w.Desired == 0 }
 
 func resourcePath(kind, ns, name string) (string, error) {
 	switch kind {
@@ -712,12 +720,13 @@ func (c *Client) RolloutRestart(ctx context.Context, ns, resource string) error 
 
 // Pod is a pod summary from a list.
 type Pod struct {
-	Name      string
-	Namespace string
-	Phase     string
-	Ready     bool
-	UID       string
-	Created   string
+	Name        string
+	Namespace   string
+	Phase       string
+	Ready       bool
+	Terminating bool
+	UID         string
+	Created     string
 }
 
 // Pods lists pods matching a label selector.
@@ -744,7 +753,8 @@ func (c *Client) Pods(ctx context.Context, ns string, selector map[string]string
 		w := parseWorkload("pod", item)
 		meta, _ := item["metadata"].(map[string]any)
 		created, _ := meta["creationTimestamp"].(string)
-		out = append(out, Pod{Name: w.Name, Namespace: w.Namespace, Phase: w.Phase, Ready: w.Healthy(), UID: w.UID, Created: created})
+		_, terminating := meta["deletionTimestamp"]
+		out = append(out, Pod{Name: w.Name, Namespace: w.Namespace, Phase: w.Phase, Ready: w.Healthy(), Terminating: terminating, UID: w.UID, Created: created})
 	}
 	return out, nil
 }
@@ -766,13 +776,15 @@ func (c *Client) FirstReadyPod(ctx context.Context, ns, resource string) (string
 	if err != nil {
 		return "", err
 	}
+	// Pods on their way out after a rollout still report ready for a while;
+	// exec into one of those fails, so they are never chosen.
 	for _, p := range pods {
-		if p.Ready {
+		if p.Ready && !p.Terminating {
 			return p.Name, nil
 		}
 	}
 	for _, p := range pods {
-		if p.Phase == "Running" {
+		if p.Phase == "Running" && !p.Terminating {
 			return p.Name, nil
 		}
 	}
@@ -983,7 +995,7 @@ func (c *Client) CopyTo(ctx context.Context, spec targets.RunSpec, dest string, 
 	if dir == "" || dir == dest {
 		dir = "/"
 	}
-	spec.Argv = []string{"tar", "xf", "-", "-C", dir}
+	spec.Argv = []string{"sh", "-c", "mkdir -p " + targets.ShellQuote(dir) + " && tar xf - -C " + targets.ShellQuote(dir)}
 	spec.Stdin = bytes.NewReader(buf.Bytes())
 	spec.StdinLen = int64(buf.Len())
 	res, err := c.Run(ctx, spec, nil)

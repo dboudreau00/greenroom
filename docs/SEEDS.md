@@ -127,11 +127,13 @@ wiped, and read-only mounts are skipped.
 | Code | Severity | Meaning |
 | --- | --- | --- |
 | `never-reset` | stale | No applied record. |
+| `last-reset-failed` | stale | The most recent reset attempt failed, either before any success or after the applied set. |
 | `wrong-version` | stale | The pinned set differs from the applied one. |
 | `seed-changed` | stale | Files of the applied set changed on disk; the changed files are listed. |
 | `too-old` | stale | The last reset is older than `staleAfter`. |
 | `recreated`, `relaunched` | stale | Container, pod or instance replaced since the reset. |
 | `drift` | stale | A drift check value differs from its expectation or its post-reset baseline. |
+| `drift-error` | stale or warn | A drift check could not be evaluated. Stale when it passed right after the reset (the seeded data is gone), otherwise a warning. |
 | `redeployed`, `server-changed`, `output-changed` | warn | Workload generation, database version or probe output changed. |
 | `probe-warning` | warn | Certificate expiring, healthcheck starting, and similar. |
 | `newer-version` | info | A newer version of the pinned persona exists. |

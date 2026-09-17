@@ -51,7 +51,7 @@ func (e *Engine) StartHeal(envName, depName string, actor string) (string, error
 	}
 	rec := e.newRun(v.Config.Name, state.RunHeal, actor)
 	if err := e.acquire(v, rec.ID()); err != nil {
-		rec.Finish(err, "")
+		rec.discard()
 		return "", err
 	}
 	go func() {

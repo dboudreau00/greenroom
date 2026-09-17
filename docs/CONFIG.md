@@ -112,7 +112,7 @@ Kind-specific fields:
 | `http` | `url`, `method`, `expectStatus`, `expectBody`, `headers`, `insecure` |
 | `postgres`, `mysql` | `dsn` or `dsnEnv`, or `via` (below) |
 | `docker` | `container` |
-| `kubernetes` | `resource` such as `deployment/web`, `statefulset/db`, `pod/x`; `namespace` |
+| `kubernetes` | `resource` such as `deployment/web`, `statefulset/db`, `pod/x`; `namespace`. Up means every desired replica is ready and the rollout is current; a workload scaled to zero counts as down. |
 | `ec2` | `instanceId` |
 | `command` | `command` (argv) or `script`; optional `container`, `resource` (pod), `instanceId` for the location |
 

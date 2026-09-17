@@ -27,7 +27,9 @@ type Env struct {
 	Registry *registry.Registry
 	Prober   *probe.Prober
 
-	opMu sync.Mutex
+	// opMu is shared across reloads of the same environment so that a run
+	// holding it keeps excluding others after the config is re-read.
+	opMu *sync.Mutex
 	busy string // id of the run currently mutating this environment
 }
 
@@ -75,7 +77,7 @@ func (e *Engine) Reload() error {
 		errs = append(errs, err)
 	}
 	for _, c := range cfgs {
-		v := &Env{Config: c}
+		v := &Env{Config: c, opMu: &sync.Mutex{}}
 		v.Registry = registry.New(c)
 		v.Prober = probe.New(c, v.Registry)
 		v.Seeds, v.SeedsErr = seeds.Discover(c.Dir)
@@ -85,14 +87,12 @@ func (e *Engine) Reload() error {
 		envs[c.Name] = v
 	}
 	e.mu.Lock()
-	// Keep the busy marker of environments with a run in flight.
+	// An environment that already exists keeps its lock and busy marker, so
+	// a run in flight (which holds the old *Env) still excludes new runs.
 	for name, old := range e.envs {
-		if nv, ok := envs[name]; ok && old.busy != "" {
+		if nv, ok := envs[name]; ok {
+			nv.opMu = old.opMu
 			nv.busy = old.busy
-			nv.opMu = sync.Mutex{}
-			// The old mutex may be held by the running operation; the new
-			// environment object inherits only the marker, and the running
-			// operation keeps using its own captured *Env.
 		}
 	}
 	e.envs = envs

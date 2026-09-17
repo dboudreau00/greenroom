@@ -481,7 +481,13 @@ func (c *Client) CopyTo(ctx context.Context, spec targets.RunSpec, dest string, 
 	if err := tw.Close(); err != nil {
 		return err
 	}
-	return c.PutArchive(ctx, spec.Container, path.Dir(dest), &buf)
+	// The archive endpoint needs the destination directory to exist; create
+	// it with the container's own mkdir when there is one.
+	dir := path.Dir(dest)
+	if dir != "/" && dir != "." {
+		c.Run(ctx, targets.RunSpec{Container: spec.Container, Argv: []string{"mkdir", "-p", dir}, Timeout: 30 * time.Second}, nil)
+	}
+	return c.PutArchive(ctx, spec.Container, dir, &buf)
 }
 
 // WaitHealthy polls until the container is running and, when it declares a
@@ -636,8 +642,11 @@ func (c *Client) execStart(ctx context.Context, id string, stdin io.Reader, col 
 		writeErr <- nil
 	}()
 	err = demux(br, col)
-	if werr := <-writeErr; werr != nil && err == nil {
-		err = fmt.Errorf("writing stdin: %w", werr)
+	// A command that exits without draining stdin makes the writer fail with
+	// a broken pipe; that is not an error when the output stream ended
+	// normally, so the write error is only reported alongside a stream error.
+	if werr := <-writeErr; werr != nil && err != nil {
+		err = fmt.Errorf("%w (stdin: %v)", err, werr)
 	}
 	if err != nil && errors.Is(err, io.ErrUnexpectedEOF) {
 		err = nil

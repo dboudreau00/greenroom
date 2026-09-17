@@ -29,8 +29,10 @@ type Options struct {
 // Client is an ssh target.
 type Client struct {
 	opt Options
-	// Binary overrides the ssh executable (tests).
-	Binary string
+	// Binary overrides the ssh executable and BinaryArgs are inserted before
+	// the ssh arguments (tests substitute a fake ssh this way).
+	Binary     string
+	BinaryArgs []string
 }
 
 // New returns a client.
@@ -95,7 +97,7 @@ func (c *Client) Run(ctx context.Context, spec targets.RunSpec, sink targets.Lin
 		remote = "cd " + targets.ShellQuote(spec.WorkDir) + " && " + remote
 	}
 	args = append(args, "--", remote)
-	cmd := exec.CommandContext(ctx, c.Binary, args...)
+	cmd := exec.CommandContext(ctx, c.Binary, append(append([]string{}, c.BinaryArgs...), args...)...)
 	cmd.Stdin = stdin
 	col := targets.NewCollector(sink, 0)
 	cmd.Stdout = col.Writer("stdout")

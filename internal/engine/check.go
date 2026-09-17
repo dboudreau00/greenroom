@@ -211,9 +211,29 @@ func (e *Engine) StaleReport(ctx context.Context, v *Env, results []probe.Result
 		return rep, err
 	}
 	rep.Applied = applied
+	// The most recent reset attempt, successful or not.
+	var lastReset *state.RunSummary
+	if runs, err := e.store.ListRuns(v.Config.Name, 25); err == nil {
+		for i := range runs {
+			if runs[i].Kind == state.RunReset {
+				lastReset = &runs[i]
+				break
+			}
+		}
+	}
+	failedSince := func(t time.Time) bool {
+		return lastReset != nil && lastReset.Status == state.StatusFailed && (t.IsZero() || lastReset.StartedAt.After(t))
+	}
 	if applied == nil {
-		add("stale", "", "never-reset", "environment has never been reset from a seed set", "run: greenroom reset "+v.Config.Name)
+		if failedSince(time.Time{}) {
+			add("stale", "", "last-reset-failed", fmt.Sprintf("no successful reset yet; the last attempt (%s ago) failed: %s", humanDuration(now.Sub(lastReset.StartedAt)), lastReset.Error), "run: greenroom reset "+v.Config.Name)
+		} else {
+			add("stale", "", "never-reset", "environment has never been reset from a seed set", "run: greenroom reset "+v.Config.Name)
+		}
 	} else {
+		if failedSince(applied.At) {
+			add("stale", "", "last-reset-failed", fmt.Sprintf("the last reset (%s ago) failed after %s was applied: %s", humanDuration(now.Sub(lastReset.StartedAt)), applied.SetID, lastReset.Error), "run: greenroom reset "+v.Config.Name)
+		}
 		if pinned != nil && applied.SetID != pinned.ID() {
 			add("stale", "", "wrong-version", fmt.Sprintf("pinned %s but %s is applied", pinned.ID(), applied.SetID), "run: greenroom reset "+v.Config.Name)
 		}
@@ -297,7 +317,16 @@ func (e *Engine) StaleReport(ctx context.Context, v *Env, results []probe.Result
 			values, errs := e.driftValues(ctx, v, dep)
 			for _, dc := range dep.Drift {
 				if err, bad := errs[dc.Name]; bad {
-					add("warn", dep.Name, "drift-error", fmt.Sprintf("drift check %s failed: %v", dc.Name, err), "")
+					msg := fmt.Sprintf("drift check %s failed: %v", dc.Name, firstLine(err.Error()))
+					sev, fix := "warn", ""
+					if applied != nil {
+						if _, hadBaseline := applied.Baselines[dep.Name][dc.Name]; hadBaseline {
+							// It worked right after the reset, so the seeded data is gone.
+							sev, fix = "stale", "run: greenroom reset "+v.Config.Name
+							msg += " (it passed right after the reset)"
+						}
+					}
+					add(sev, dep.Name, "drift-error", msg, fix)
 					continue
 				}
 				val := values[dc.Name]
@@ -326,6 +355,13 @@ func (e *Engine) StaleReport(ctx context.Context, v *Env, results []probe.Result
 	}
 	rep.Fresh = rep.Stale == 0 && applied != nil
 	return rep, nil
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 func sevRank(s string) int {

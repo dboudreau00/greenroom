@@ -66,7 +66,7 @@ func (e *Engine) StartSnapshot(envName, depName, actor string) (string, error) {
 	}
 	rec := e.newRun(v.Config.Name, state.RunSnapshot, actor)
 	if err := e.acquire(v, rec.ID()); err != nil {
-		rec.Finish(err, "")
+		rec.discard()
 		return "", err
 	}
 	go func() {

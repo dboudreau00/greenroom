@@ -409,6 +409,10 @@ func (s *Server) runs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) run(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.eng.Env(r.PathValue("env")); err != nil {
+		jsonError(w, http.StatusNotFound, err.Error())
+		return
+	}
 	run, err := s.eng.Run(r.PathValue("env"), r.PathValue("id"))
 	if err != nil {
 		jsonError(w, http.StatusNotFound, "run not found")
@@ -419,6 +423,10 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 	env, id := r.PathValue("env"), r.PathValue("id")
+	if _, err := s.eng.Env(env); err != nil {
+		jsonError(w, http.StatusNotFound, err.Error())
+		return
+	}
 	fl, ok := w.(http.Flusher)
 	if !ok {
 		jsonError(w, http.StatusInternalServerError, "streaming unsupported")

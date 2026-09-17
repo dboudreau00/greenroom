@@ -104,7 +104,7 @@ func (r *recorder) EndStep(idx int, err error, detail string) {
 	r.mu.Lock()
 	st := &r.run.Steps[idx]
 	st.EndedAt = r.e.Now()
-	st.Duration = st.EndedAt.Sub(st.StartedAt)
+	st.Duration = max(st.EndedAt.Sub(st.StartedAt), 0)
 	st.Detail = detail
 	if err != nil {
 		st.Status = state.StatusFailed
@@ -135,7 +135,7 @@ func (r *recorder) SkipStep(idx int, reason string) {
 func (r *recorder) Finish(err error, summary string) *state.Run {
 	r.mu.Lock()
 	r.run.EndedAt = r.e.Now()
-	r.run.Duration = r.run.EndedAt.Sub(r.run.StartedAt)
+	r.run.Duration = max(r.run.EndedAt.Sub(r.run.StartedAt), 0)
 	r.run.Summary = summary
 	if err != nil {
 		r.run.Status = state.StatusFailed
@@ -197,6 +197,15 @@ func (r *recorder) snapshotLocked() *state.Run {
 	cp.Steps = append([]state.StepResult(nil), r.run.Steps...)
 	cp.Log = append([]state.LogLine(nil), r.run.Log...)
 	return &cp
+}
+
+// discard drops a run that was refused before doing any work (for example
+// because the environment was busy) so it does not show up in history.
+func (r *recorder) discard() {
+	r.e.mu.Lock()
+	delete(r.e.active, r.run.ID)
+	r.e.mu.Unlock()
+	r.e.store.DeleteRun(r.run.Env, r.run.ID)
 }
 
 // Snapshot returns a copy of the run so far.

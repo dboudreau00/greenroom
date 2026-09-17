@@ -314,6 +314,9 @@ func (p *Prober) probeKube(ctx context.Context, dep config.Dependency, res *Resu
 	}
 	if !w.Healthy() {
 		msg := fmt.Sprintf("%d/%d ready", w.Ready, w.Desired)
+		if w.ScaledToZero() {
+			msg = "scaled to 0 replicas"
+		}
 		if w.Message != "" {
 			msg += ": " + w.Message
 		}

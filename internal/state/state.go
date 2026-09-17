@@ -472,8 +472,23 @@ func (s *Store) SaveRun(r *Run) error {
 	return config.WriteJSON(filepath.Join(s.envDir(r.Env), "runs", r.ID+".json"), r)
 }
 
+// DeleteRun removes a run file (used when a run is refused before it starts).
+func (s *Store) DeleteRun(env, id string) error {
+	if !config.ValidName(env) || strings.ContainsAny(id, `/\`) || strings.Contains(id, "..") {
+		return errors.New("bad run reference")
+	}
+	err := os.Remove(filepath.Join(s.envDir(env), "runs", id+".json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
 // LoadRun reads a run file.
 func (s *Store) LoadRun(env, id string) (*Run, error) {
+	if !config.ValidName(env) {
+		return nil, errors.New("bad environment name")
+	}
 	if strings.ContainsAny(id, `/\`) || strings.Contains(id, "..") {
 		return nil, errors.New("bad run id")
 	}
@@ -490,6 +505,9 @@ func (s *Store) LoadRun(env, id string) (*Run, error) {
 
 // ListRuns returns the most recent runs, newest first.
 func (s *Store) ListRuns(env string, limit int) ([]RunSummary, error) {
+	if !config.ValidName(env) {
+		return nil, errors.New("bad environment name")
+	}
 	dir := filepath.Join(s.envDir(env), "runs")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
