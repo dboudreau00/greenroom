@@ -7,58 +7,62 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: demo
-          POSTGRES_PASSWORD: demo
-          POSTGRES_DB: demo
-        ports: ["5477:5432"]
-        options: >-
-          --health-cmd "pg_isready -U demo -d demo"
-          --health-interval 5s --health-timeout 3s --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
       - run: go vet ./...
-      - run: go test ./... -count=1
+      - name: build and scaffold the example workspace
+        run: |
+          go build -o build/greenroom ./cmd/greenroom
+          rm -rf /tmp/ws && build/greenroom -C /tmp/ws init >/dev/null
+      - name: start the example stack
+        run: |
+          docker compose -f /tmp/ws/environments/acme-demo/docker-compose.yml up -d
+          for i in $(seq 1 40); do
+            docker inspect -f '{{.State.Health.Status}}' acme-demo-db 2>/dev/null | grep -q healthy && break
+            sleep 2
+          done
+          docker ps --format '{{.Names}} {{.Status}}'
+      - name: unit and integration tests
+        run: go test ./... -count=1
         env:
           GREENROOM_TEST_PG_DSN: postgres://demo:demo@127.0.0.1:5477/demo?sslmode=disable
       - name: end to end against Docker and Postgres
         run: |
           set -euo pipefail
-          go build -o build/greenroom ./cmd/greenroom
-          rm -rf /tmp/ws && build/greenroom -C /tmp/ws init >/dev/null
           cd /tmp/ws
-          docker compose -f environments/acme-demo/docker-compose.yml up -d
-          for i in $(seq 1 30); do docker inspect -f '{{.State.Health.Status}}' acme-demo-db 2>/dev/null | grep -q healthy && break; sleep 2; done
-          export ACME_PG_DSN="postgres://demo:demo@127.0.0.1:5477/demo?sslmode=disable"
-          # The workflow service also listens on 5477; the compose stack must win, so move it.
-          ACME_PG_PORT=5478 docker compose -f environments/acme-demo/docker-compose.yml up -d --force-recreate db
-          export ACME_PG_DSN="postgres://demo:demo@127.0.0.1:5478/demo?sslmode=disable" ACME_PG_ADDR=127.0.0.1:5478
-          for i in $(seq 1 30); do docker inspect -f '{{.State.Health.Status}}' acme-demo-db 2>/dev/null | grep -q healthy && break; sleep 2; done
-          $GITHUB_WORKSPACE/build/greenroom validate
-          $GITHUB_WORKSPACE/build/greenroom snapshot acme-demo postgres
-          $GITHUB_WORKSPACE/build/greenroom reset acme-demo --yes
-          $GITHUB_WORKSPACE/build/greenroom stale acme-demo
-          $GITHUB_WORKSPACE/build/greenroom check acme-demo
+          GR=$GITHUB_WORKSPACE/build/greenroom
+          $GR validate
+          $GR targets acme-demo
+          $GR snapshot acme-demo postgres
+          $GR reset acme-demo --yes
+          $GR stale acme-demo
+          $GR check acme-demo
+          $GR snapshot acme-demo cache
           docker exec acme-demo-db psql -U demo -d demo -c "INSERT INTO orders (customer_id, amount_cents, status, placed_at) VALUES (1, 1, 'open', now())"
-          if $GITHUB_WORKSPACE/build/greenroom stale acme-demo; then echo "drift not detected"; exit 1; fi
-          $GITHUB_WORKSPACE/build/greenroom reset acme-demo --yes retail-ops@v1
-          $GITHUB_WORKSPACE/build/greenroom stale acme-demo || true
-          docker compose -f environments/acme-demo/docker-compose.yml down -v
+          if $GR stale acme-demo; then echo "drift not detected"; exit 1; fi
+          $GR reset acme-demo --yes retail-ops@v1
+          $GR stale acme-demo || true
+          docker stop acme-demo-cache
+          $GR heal acme-demo cache
+          $GR check acme-demo --no-drift || true
+          $GR envs
+      - name: tear down
+        if: always()
+        run: docker compose -f /tmp/ws/environments/acme-demo/docker-compose.yml down -v || true
 
   build:
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -85,11 +89,36 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+          generate_release_notes: true
 
   image:
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t greenroom:ci --build-arg VERSION=${GITHUB_SHA::7} .
-      - run: docker run --rm greenroom:ci version
+      - name: build
+        run: docker build -t ghcr.io/${{ github.repository }}:${{ github.sha }} --build-arg VERSION=${GITHUB_REF_NAME} .
+      - run: docker run --rm ghcr.io/${{ github.repository }}:${{ github.sha }} version
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: push
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          IMG=ghcr.io/${{ github.repository }}
+          docker push $IMG:${{ github.sha }}
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            docker tag $IMG:${{ github.sha }} $IMG:${GITHUB_REF_NAME}
+            docker push $IMG:${GITHUB_REF_NAME}
+          fi
+          if [ "${GITHUB_REF_NAME}" = main ]; then
+            docker tag $IMG:${{ github.sha }} $IMG:latest
+            docker push $IMG:latest
+          fi

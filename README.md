@@ -1,81 +1,123 @@
-# Greenroom
+<p align="center">
+  <img src="docs/logo.svg" width="110" alt="Greenroom logo">
+</p>
 
-Demo environment reset and seed tool. Greenroom defines demo state as
-versioned seed files per persona or vertical, resets an environment to a
-known-good snapshot in one command, runs a pre-call health check across
-every dependency, and reports what is stale. It ships as one binary with a
-web portal, and attaches to Docker, Kubernetes and EKS, EC2 instances
-(including SQL bastions reached through SSM), ssh hosts, Postgres and
-MySQL, and plain TCP, TLS and HTTP endpoints.
+<h1 align="center">Greenroom</h1>
 
-```bash
-greenroom init                  # scaffold a workspace with the bundled example
-docker compose -f environments/acme-demo/docker-compose.yml up -d
-greenroom check acme-demo       # GREEN / AMBER / RED, exit 0 / 1 / 2
-greenroom snapshot acme-demo postgres
-greenroom reset acme-demo       # known-good snapshot + pinned seed set
-greenroom stale acme-demo       # what drifted since
-greenroom serve                 # portal on http://127.0.0.1:8470
-```
+<p align="center">
+  <b>Every demo starts from a known-good state.</b><br>
+  Versioned seed sets, one-command resets, pre-call health checks and a stale report,<br>
+  for demo environments on Docker, Kubernetes, EKS and EC2.
+</p>
+
+<p align="center">
+  <a href="https://github.com/dboudreau00/greenroom/actions/workflows/ci.yml"><img src="https://github.com/dboudreau00/greenroom/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
+  <a href="https://github.com/dboudreau00/greenroom/releases"><img src="https://img.shields.io/github/v/release/dboudreau00/greenroom?include_prereleases&color=22c55e" alt="release"></a>
+  <img src="https://img.shields.io/github/go-mod/go-version/dboudreau00/greenroom" alt="go version">
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/dboudreau00/greenroom" alt="license"></a>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/environment.png" width="900" alt="An environment in the Greenroom portal: readiness, pinned and applied seed set, uptime, and the dependency table with sparklines">
+</p>
+
+## The problem
+
+A demo environment is a shared stage. Between calls, someone runs a
+walkthrough and leaves orders behind. A container gets recreated and the
+data goes with it. The SQL bastion gets stopped overnight to save money.
+The seed script in the repo moves on to version 3 while the environment is
+still running version 2. A certificate quietly expires. You find out on the
+call, in front of the prospect.
+
+Greenroom makes the state of a demo environment a versioned, checkable,
+resettable thing.
 
 ## What it does
 
-**Versioned seed sets.** `environments/<env>/seeds/<persona>/v<N>/`
-holds a `seed.json` manifest and its files: SQL, fixtures, scripts, HTTP
-calls. Every file is content hashed; the hash is recorded when the set is
-applied, so any later edit shows up as stale. Personas are whatever your
-sales motion needs: `cfo`, `retail-ops`, `fintech`, `healthcare`.
+**Seed sets are code.** `environments/<env>/seeds/<persona>/v<N>/` holds a
+manifest and its files: SQL, fixtures, scripts, HTTP calls. Personas are
+whatever your motion needs (`cfo`, `retail-ops`, `healthcare`). Every file
+is content hashed and the hash is recorded when the set is applied, so an
+edit after the fact shows up as stale.
 
-**One-command reset.** `greenroom reset <env>` probes everything, heals
-what it can, runs each dependency's reset strategy (Postgres template
-clone, schema drop, Docker snapshot restore or recreate, Kubernetes
-rollout restart, EC2 reboot, or your own script), applies the seed steps,
-verifies, and records fingerprints. Snapshots make the restore fast:
-`greenroom snapshot` clones a Postgres database into a template, or
-commits a container and archives its volumes.
+**One command resets to known good.** `greenroom reset <env>` probes and
+heals, runs each dependency's reset strategy (Postgres template clone,
+schema drop, Docker snapshot restore or recreate, Kubernetes rollout
+restart, EC2 reboot, or your own script), applies the seed steps, verifies,
+and records fingerprints. `greenroom snapshot` makes the restore fast by
+cloning a Postgres database into a template, or committing a container with
+its volumes archived.
 
-**Pre-call check.** `greenroom check <env>` probes every dependency in
-parallel: TCP ports, TLS certificate expiry, HTTP endpoints, Postgres and
-MySQL (directly or through a bastion), Docker containers and their
-healthchecks, Kubernetes workloads, EC2 instances and their status checks,
-arbitrary commands. Critical dependencies down make it RED. The portal's
-scheduler runs the same probes on an interval, so every dependency has a
-24 hour and 7 day uptime figure and an incident list, and dependencies
-marked `autoHeal` are restarted, started or scaled back without anyone
-watching.
+**Pre-call check in seconds.** `greenroom check <env>` probes every
+dependency in parallel: TCP ports, TLS expiry, HTTP endpoints, Postgres and
+MySQL, Docker containers and their healthchecks, Kubernetes workloads, EC2
+instances and their status checks, arbitrary commands. GREEN, AMBER or RED,
+with exit codes to match, so it slots into a calendar hook or CI.
 
-**Stale report.** `greenroom stale <env>` says why the environment is not
-exactly what the seed set promises: never reset, pinned v3 but v2 applied,
-seed files changed since the reset (with the file list), reset older than
-the limit, container or instance replaced underneath, and drift checks
-such as `SELECT count(*) FROM orders` that no longer match the value the
+**It tells you what is stale, and why.** Never reset. Pinned v3 but v2
+applied. Seed files changed since the reset (with the file list). Reset
+older than the limit. Container or instance replaced underneath. A drift
+check like `SELECT count(*) FROM orders` that no longer matches what the
 reset left behind.
 
-**Portal.** `greenroom serve` hosts a token-protected web UI over the same
-engine: environment cards with readiness, dependency table with sparklines
-and heal and snapshot buttons, seed set browser, one-click pre-call check,
-reset dialog with persona and version, live run logs over server-sent
-events, and a JSON API for automation.
+**Uptime and self-healing.** The portal's scheduler runs the same probes on
+an interval. Every dependency gets 24 hour and 7 day uptime, an incident
+list, and, when marked `autoHeal`, gets started, restarted or scaled back
+without anyone watching.
 
-## Attaching to platforms
+## Five minutes to green
+
+```bash
+greenroom init                                   # scaffold a workspace with the bundled example
+docker compose -f environments/acme-demo/docker-compose.yml up -d
+greenroom check acme-demo                        # GREEN / AMBER / RED, exit 0 / 1 / 2
+greenroom snapshot acme-demo postgres            # capture the known-good template
+greenroom reset acme-demo                        # restore it and apply the pinned seed set
+greenroom stale acme-demo                        # what drifted since
+greenroom serve                                  # portal on http://127.0.0.1:8470
+```
+
+```
+$ greenroom check acme-demo
+GREEN  acme-demo  all 6 dependencies up, seed fresh (13ms)
+  up  postgres       5ms  connected: PostgreSQL 16.15 (critical)
+  up  db-container   1ms  running, healthy (critical)
+  up  cache          1ms  running, healthy
+  up  web            1ms  HTTP 200 (critical)
+  up  web-container  1ms  running
+  up  db-port        0s   port open
+  seed fresh: cfo@v2
+
+$ greenroom stale acme-demo
+acme-demo: pinned cfo@v2, applied cfo@v2 at 2026-09-16 23:37
+  [stale] postgres: orders is 14, expected 12 (value after the reset)
+          fix: run: greenroom reset acme-demo
+```
+
+Binaries for Linux, macOS and Windows are on the
+[releases page](https://github.com/dboudreau00/greenroom/releases), and a
+container image at `ghcr.io/dboudreau00/greenroom`.
+
+## Attach it to what you run
 
 | Platform | Target kind | Probes | Reset and heal | Seed steps run |
 | --- | --- | --- | --- | --- |
 | Docker | `docker` (socket, npipe, tcp, tls) | container running and healthy | restart, recreate, snapshot restore; start, restart | docker exec |
 | Kubernetes, EKS | `kubernetes` (kubeconfig with exec plugins, in-cluster, explicit token) | deployment, statefulset, daemonset, pod ready | rollout restart; scale | pod exec over WebSocket |
 | EC2 | `aws` (env, profile with assume role, IRSA, task role, instance profile) | instance running and status checks | reboot; start | SSM Run Command |
-| SSH host | `ssh` | via command probes | via command | ssh with stdin |
-| Postgres, MySQL | direct DSN or `via` any target above | connect and version | template, schema, script | driver or psql / mysql on the far side |
+| SSH host | `ssh` | command probes | command | ssh with stdin |
+| Postgres, MySQL | direct DSN, or `via` any target above | connect and version | template, schema, script | driver, or psql / mysql on the far side |
 | Anything with a port or URL | none needed | tcp, tls, http | command | local |
 
-See [docs/CONFIG.md](docs/CONFIG.md) for every field,
-[docs/SEEDS.md](docs/SEEDS.md) for the seed format and what a reset does,
-[docs/DEPLOY.md](docs/DEPLOY.md) plus the `deploy/` folders for Docker
-Compose, Kubernetes, EKS and EC2, [docs/API.md](docs/API.md) for the HTTP
-API, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how it fits
-together.
+The Docker, Kubernetes, AWS and WebSocket clients are written in the repo
+against the raw APIs. The binary has two dependencies, the Postgres and
+MySQL drivers, builds without cgo, and cross-compiles everywhere Go does.
 
-## Example: a SQL bastion that must stay up
+## The SQL bastion case
+
+A warehouse behind a bastion that must stay up, seeded and checked without
+the database ever being reachable from where Greenroom runs:
 
 ```json
 {
@@ -96,14 +138,70 @@ together.
 }
 ```
 
-The bastion is probed every minute, its uptime is charted, a stopped
-instance is started automatically, and the warehouse is seeded by running
-`psql` on the bastion through SSM, so the database never has to be
-reachable from wherever the portal runs.
+The bastion is probed every minute and charted. A stopped instance is
+started automatically. Seed SQL and drift queries run through `psql` on the
+bastion via SSM Run Command, streamed on stdin, nothing written to disk.
+The same `via` block works with a Docker container, a Kubernetes pod or an
+ssh host.
+
+## The portal
+
+`greenroom serve` hosts a token-protected UI over the same engine. One-click
+pre-call check, a reset dialog with persona and version, heal and snapshot
+buttons per dependency, a seed set browser, live run logs over server-sent
+events, and a JSON API for automation.
+
+<p align="center">
+  <img src="docs/screenshots/check.png" width="880" alt="Pre-call check result: every dependency up, nothing stale">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/stale.png" width="880" alt="Stale report: orders is 14, expected 12, with the applied record, fingerprints and baselines">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/run.png" width="880" alt="A reset run: steps with timings on the left, the streamed log on the right">
+</p>
+
+## CLI
+
+| Command | What it does | Exit codes |
+| --- | --- | --- |
+| `greenroom check <env>` | Probe every dependency, record samples, report readiness and staleness | 0 green, 1 amber, 2 red |
+| `greenroom stale <env>` | Compare pin, applied record, fingerprints and drift checks | 0 fresh, 1 stale |
+| `greenroom reset <env> [persona@vN]` | Reset strategies, seed steps, verify, record | 0 ok, 1 failed |
+| `greenroom snapshot <env> <dep>` | Capture a Postgres template or a Docker commit with volumes | |
+| `greenroom heal <env> <dep>` | Run a dependency's heal action and re-probe | |
+| `greenroom seeds <env>`, `envs`, `targets`, `validate` | Listings and config checks | |
+| `greenroom serve` | Portal, API and the background prober | |
+| `greenroom init` | Scaffold a workspace with the bundled example | |
+
+Every command takes `--json`. `-C dir` points at the workspace.
+
+## Deploy
+
+| Where | Files |
+| --- | --- |
+| Docker Compose next to the demo stack | [deploy/compose](deploy/compose/docker-compose.yml) |
+| Kubernetes, with a least-privilege Role | [deploy/kubernetes](deploy/kubernetes/README.md) |
+| EKS with IRSA | [deploy/eks](deploy/eks/README.md) |
+| EC2 with systemd, instance profile and a scoped IAM policy | [deploy/ec2](deploy/ec2/README.md) |
+
+Set `GREENROOM_TOKEN`. Without a token the portal only binds to loopback.
+DSN passwords and authorization headers never appear in API responses or
+run logs.
+
+## Documentation
+
+- [docs/CONFIG.md](docs/CONFIG.md): every field of the workspace, environment, target and dependency files
+- [docs/SEEDS.md](docs/SEEDS.md): the seed set format, step kinds, what a reset does, the stale rules
+- [docs/DEPLOY.md](docs/DEPLOY.md): hosting, security model, upgrades
+- [docs/API.md](docs/API.md): the HTTP API and server-sent events
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how the packages fit together
 
 ## Build
 
-Go 1.26 or newer. No cgo.
+Go 1.26 or newer, no cgo.
 
 ```bash
 make            # vet, test, build/greenroom
@@ -111,17 +209,7 @@ make linux      # cross compile
 make docker     # container image
 ```
 
-On Windows: `.\build.ps1` (add `-All` for cross compiling).
-
-## Layout
-
-```
-cmd/greenroom        CLI
-internal/            engine, probes, targets, state, server, ui, config, seeds
-examples/            a workspace with the acme-demo environment (greenroom -C examples serve)
-deploy/              compose, kubernetes, eks, ec2
-docs/                reference
-```
+On Windows: `.\build.ps1` (add `-All` to cross compile).
 
 ## License
 

@@ -84,7 +84,9 @@
   function modal(html, onMount) {
     const root = document.getElementById('modal-root');
     root.innerHTML = '<div class="modal-back"><div class="modal" role="dialog">' + html + '</div></div>';
-    const close = () => { root.innerHTML = ''; };
+    const onKey = (e) => { if (e.key === 'Escape') close(); };
+    const close = () => { root.innerHTML = ''; document.removeEventListener('keydown', onKey); };
+    document.addEventListener('keydown', onKey);
     root.querySelector('.modal-back').addEventListener('click', (e) => { if (e.target.classList.contains('modal-back')) close(); });
     root.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', close));
     if (onMount) onMount(root, close);
