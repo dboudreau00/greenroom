@@ -59,7 +59,12 @@ func TestCLIFlow(t *testing.T) {
 		t.Fatalf("seeds json: %d", code)
 	}
 	out.Reset()
-	// Nothing is running, so the check is RED (exit 2) and records a run.
+	// Point every dependency at ports nobody listens on so the check is RED
+	// (exit 2) whether or not the example stack happens to be running.
+	t.Setenv("ACME_PG_DSN", "postgres://demo:demo@127.0.0.1:1/demo?sslmode=disable&connect_timeout=2")
+	t.Setenv("ACME_PG_ADDR", "127.0.0.1:1")
+	t.Setenv("ACME_WEB_URL", "http://127.0.0.1:1/")
+	t.Setenv("DOCKER_HOST", "tcp://127.0.0.1:1")
 	code = run([]string{"-C", dir, "check", "acme-demo", "--no-drift"}, &out, &errb)
 	if code != 2 || !strings.HasPrefix(out.String(), "RED") {
 		t.Fatalf("check: %d %s %s", code, out.String(), errb.String())
