@@ -151,6 +151,11 @@ pre-call check, a reset dialog with persona and version, heal and snapshot
 buttons per dependency, a seed set browser, live run logs over server-sent
 events, and a JSON API for automation.
 
+It ships inside the binary: no build step, no bundler, no CDN for anything
+but the two fonts. Dark and light themes follow the system setting and can
+be toggled, every colour and motion value is a CSS custom property, and the
+decorative animation turns itself off under `prefers-reduced-motion`.
+
 <p align="center">
   <img src="docs/screenshots/check.png" width="880" alt="Pre-call check result: every dependency up, nothing stale">
 </p>

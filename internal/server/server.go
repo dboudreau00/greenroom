@@ -89,7 +89,7 @@ func (s *Server) withHeaders(next http.Handler) http.Handler {
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "no-referrer")
-		h.Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'")
+		h.Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'")
 		next.ServeHTTP(w, r)
 	})
 }
@@ -163,8 +163,18 @@ func (s *Server) renderLogin(w http.ResponseWriter, msg string) {
 	if msg != "" {
 		note = `<p class="err">` + html.EscapeString(msg) + `</p>`
 	}
-	fmt.Fprintf(w, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Greenroom sign in</title><link rel="stylesheet" href="/assets/style.css"></head>
-<body class="login"><form method="post" action="/login" class="login-card"><h1><span class="dot"></span>Greenroom</h1><p>Enter the portal token to continue.</p>%s<input type="password" name="token" placeholder="token" autofocus autocomplete="current-password"><button type="submit">Sign in</button></form></body></html>`, note)
+	fmt.Fprintf(w, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Greenroom sign in</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/assets/style.css"></head>
+<body class="login"><div class="login-spot"></div>
+<form method="post" action="/login" class="login-card card rise">
+<div class="head"><svg width="38" height="38" viewBox="0 0 32 32" fill="none" aria-hidden="true"><circle cx="16" cy="16" r="9" stroke="#22c55e" stroke-width="2" opacity="0.9"/><circle cx="16" cy="16" r="4.2" fill="#22c55e"/><path d="M16 2.5a13.5 13.5 0 0 1 11.7 6.75" stroke="#22c55e" stroke-width="1.25" stroke-linecap="round" opacity="0.55"/><path d="M16 29.5A13.5 13.5 0 0 1 4.3 22.75" stroke="#22c55e" stroke-width="1.25" stroke-linecap="round" opacity="0.55"/></svg>
+<h1>Greenroom</h1><p>Enter the portal token to continue.</p></div>%s
+<div class="field"><label for="token">Portal token</label><input id="token" type="password" name="token" placeholder="&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;" autofocus autocomplete="current-password"></div>
+<button type="submit" class="btn primary" style="width:100%%"><span>Sign in</span></button>
+<p class="hint">The token is the one <span class="mono">greenroom serve</span> was started with.</p>
+</form></body></html>`, note)
 }
 
 func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {

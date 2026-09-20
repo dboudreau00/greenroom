@@ -1,44 +1,84 @@
-/* Greenroom portal. Plain JS, hash routing, no build step. */
+/* Greenroom portal. Plain JS, hash routing, no build step.
+   Visual system designed in Magic Patterns and ported to vanilla CSS. */
 (function () {
   'use strict';
 
-  const app = document.getElementById('app');
-  const crumbs = document.getElementById('crumbs');
-  let me = { actor: '', auth: false, version: '' };
-  let timer = null;
-  let source = null;
+  var app = document.getElementById('app');
+  var crumbs = document.getElementById('crumbs');
+  var me = { actor: '', auth: false, version: '' };
+  var timer = null;
+  var source = null;
+  var envView = null;
+  var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  // ---------- helpers ----------
-  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
-  async function api(path, opts = {}) {
-    const headers = Object.assign({ 'X-Requested-With': 'greenroom' }, opts.headers || {});
-    if (opts.body && typeof opts.body !== 'string') {
-      opts.body = JSON.stringify(opts.body);
-      headers['Content-Type'] = 'application/json';
-    }
-    const res = await fetch(path, Object.assign({}, opts, { headers }));
-    if (res.status === 401) { location.href = '/login'; throw new Error('signed out'); }
-    const text = await res.text();
-    let data = null;
-    try { data = text ? JSON.parse(text) : null; } catch (e) { data = { error: text }; }
-    if (!res.ok) throw new Error((data && data.error) || res.statusText);
-    return data;
+  // ---------- theme ----------
+  var theme = null;
+  try { theme = localStorage.getItem('gr-theme'); } catch (e) { /* storage unavailable */ }
+  if (theme !== 'light' && theme !== 'dark') theme = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  function applyTheme() {
+    document.documentElement.setAttribute('data-theme', theme);
+    var b = document.getElementById('btn-theme');
+    if (b) b.innerHTML = theme === 'dark' ? I.sun : I.moon;
   }
 
-  function toast(msg, kind) {
-    const el = document.createElement('div');
-    el.className = 'toast ' + (kind || '');
-    el.textContent = msg;
+  // ---------- icons ----------
+  function svg(inner, size) {
+    return '<svg width="' + (size || 15) + '" height="' + (size || 15) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + inner + '</svg>';
+  }
+  var I = {
+    chevron: svg('<path d="m9 18 6-6-6-6"/>', 13),
+    refresh: svg('<path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/>', 13),
+    logout: svg('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/>', 13),
+    sun: svg('<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>'),
+    moon: svg('<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>'),
+    x: svg('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'),
+    alert: svg('<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>', 16),
+    folder: svg('<path d="M12 10v6"/><path d="M9 13h6"/><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>', 19),
+    check: svg('<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>'),
+    info: svg('<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>'),
+    xcircle: svg('<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>'),
+    ring: '<svg width="13" height="13" viewBox="0 0 16 16" class="ring" aria-hidden="true"><circle cx="8" cy="8" r="6.4" stroke="currentColor" stroke-width="2" fill="none" opacity="0.25"/><path d="M8 1.6a6.4 6.4 0 0 1 6.4 6.4" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>'
+  };
+  document.getElementById('btn-reload').innerHTML = I.refresh + '<span>Reload config</span>';
+  document.getElementById('btn-logout').innerHTML = I.logout + '<span>Sign out</span>';
+  applyTheme();
+
+  // ---------- helpers ----------
+  var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
+
+  function api(path, opts) {
+    opts = opts || {};
+    var headers = Object.assign({ 'X-Requested-With': 'greenroom' }, opts.headers || {});
+    if (opts.body && typeof opts.body !== 'string') { opts.body = JSON.stringify(opts.body); headers['Content-Type'] = 'application/json'; }
+    return fetch(path, Object.assign({}, opts, { headers: headers })).then(function (res) {
+      if (res.status === 401) { location.href = '/login'; throw new Error('signed out'); }
+      return res.text().then(function (text) {
+        var data = null;
+        try { data = text ? JSON.parse(text) : null; } catch (e) { data = { error: text }; }
+        if (!res.ok) throw new Error((data && data.error) || res.statusText);
+        return data;
+      });
+    });
+  }
+
+  function toast(title, kind, body) {
+    var el = document.createElement('div');
+    el.className = 'toast card ' + (kind || 'info');
+    el.setAttribute('role', 'status');
+    el.innerHTML = (kind === 'ok' ? I.check : kind === 'error' ? I.xcircle : I.info) +
+      '<div style="min-width:0;flex:1"><div class="tt">' + esc(title) + '</div>' + (body ? '<div class="tb">' + esc(body) + '</div>' : '') + '</div>' +
+      '<button class="btn icon ghost x" aria-label="Dismiss">' + I.x + '</button>';
+    var remove = function () { if (el.classList.contains('leaving')) return; el.classList.add('leaving'); setTimeout(function () { el.remove(); }, 180); };
+    el.querySelector('.x').addEventListener('click', remove);
     document.getElementById('toasts').appendChild(el);
-    setTimeout(() => el.remove(), 6000);
+    setTimeout(remove, 5200);
   }
 
   function ago(iso) {
     if (!iso) return 'never';
-    const t = new Date(iso).getTime();
-    if (isNaN(t) || t < 0 || t === 0) return 'never';
-    const s = Math.max(0, (Date.now() - t) / 1000);
+    var t = new Date(iso).getTime();
+    if (isNaN(t) || t <= 0 || new Date(iso).getFullYear() < 2000) return 'never';
+    var s = Math.max(0, (Date.now() - t) / 1000);
     if (s < 60) return Math.floor(s) + 's ago';
     if (s < 3600) return Math.floor(s / 60) + 'm ago';
     if (s < 86400 * 2) return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm ago';
@@ -46,354 +86,595 @@
   }
   function when(iso) {
     if (!iso) return '';
-    const d = new Date(iso);
+    var d = new Date(iso);
     if (isNaN(d.getTime()) || d.getFullYear() < 2000) return '';
     return d.toLocaleString();
   }
   function dur(ns) {
     if (ns == null) return '';
-    const ms = ns / 1e6;
+    var ms = ns / 1e6;
     if (ms < 1000) return Math.round(ms) + 'ms';
     if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
-    const m = Math.floor(ms / 60000), s = Math.round((ms % 60000) / 1000);
+    var m = Math.floor(ms / 60000), s = Math.round((ms % 60000) / 1000);
     return m + 'm' + (s ? ' ' + s + 's' : '');
   }
   function pct(v) { return v == null ? '' : (Math.round(v * 100) / 100).toFixed(2) + '%'; }
-  function badge(kind, label) { return '<span class="badge ' + esc(kind) + '">' + esc(label) + '</span>'; }
+  function badge(kind, label, o) {
+    o = o || {};
+    return '<span class="badge ' + esc(kind) + (o.size ? ' ' + o.size : '') + (o.upper ? ' upper' : '') + '">' +
+      (o.dot ? '<span class="dot' + (o.pulse === false ? '' : ' pulse') + '"></span>' : '') + esc(label) + '</span>';
+  }
+  function chip(kind, label) { return '<span class="chip ' + esc(kind) + '">' + esc(label) + '</span>'; }
   function statusBadge(st) {
-    const map = { ok: 'green', failed: 'red', running: 'blue', cancelled: 'grey', skipped: 'grey' };
-    return badge(map[st] || 'grey', st);
+    var map = { ok: 'green', failed: 'red', running: 'blue', cancelled: 'grey', skipped: 'grey' };
+    return badge(map[st] || 'grey', st, { dot: st === 'running' });
   }
-  function readinessBadge(r, big) {
-    const label = { green: 'GREEN', amber: 'AMBER', red: 'RED' }[r] || (r || '').toUpperCase();
-    return '<span class="badge ' + esc(r) + (big ? ' big' : '') + '">' + esc(label) + '</span>';
+  function readinessBadge(r, size) {
+    var label = { green: 'GREEN', amber: 'AMBER', red: 'RED' }[r] || String(r || '').toUpperCase();
+    return badge(r || 'grey', label, { dot: true, size: size, upper: true });
   }
-  function spark(points) {
+  function ring(r) {
+    var size = 96, rr = size / 2 - 4, c = 2 * Math.PI * rr;
+    var frac = { green: 1, amber: 0.62, red: 0.28 }[r] || 0.28;
+    var dash = (c * frac).toFixed(2);
+    return '<div class="ringwrap"><svg width="' + size + '" height="' + size + '" aria-hidden="true">' +
+      '<circle class="track" cx="48" cy="48" r="' + rr + '" fill="none" stroke-width="2"/>' +
+      '<circle class="arc ' + esc(r) + '" cx="48" cy="48" r="' + rr + '" fill="none" stroke-width="2.5" style="--gr-dash:' + dash + ';stroke-dasharray:' + dash + ' ' + c.toFixed(2) + '"/>' +
+      '</svg>' + readinessBadge(r, 'lg') + '</div>';
+  }
+  function bucketLabel(i, n, hours) {
+    var minutesAgo = Math.round((n - 1 - i) * (hours * 60 / n));
+    if (minutesAgo === 0) return 'now';
+    var h = Math.floor(minutesAgo / 60), m = minutesAgo % 60;
+    if (h === 0) return m + 'm ago';
+    return m === 0 ? h + 'h ago' : h + 'h ' + m + 'm ago';
+  }
+  function spark(points, hours) {
     if (!points || !points.length) return '<span class="muted small">no data</span>';
-    return '<span class="spark">' + points.map((p) => '<i class="' + (p === 1 ? 'ok' : p === 0 ? 'bad' : '') + '"></i>').join('') + '</span>';
+    var n = points.length;
+    return '<span class="spark" role="img" aria-label="uptime sparkline">' + points.map(function (p, i) {
+      var cls = p === 1 ? 'ok' : p === 0 ? 'bad' : '';
+      var h = p === 1 ? (58 + ((i * 13) % 42)) + '%' : '';
+      var word = p === 1 ? 'up' : p === 0 ? 'down' : 'no sample';
+      return '<i class="' + cls + '" style="--i:' + i + (h ? ';height:' + h : '') + '" title="' + esc(bucketLabel(i, n, hours || 24) + ': ' + word) + '"></i>';
+    }).join('') + '</span>';
+  }
+  function countUp(container) {
+    var els = container.querySelectorAll('[data-count]');
+    Array.prototype.forEach.call(els, function (el) {
+      var target = parseFloat(el.getAttribute('data-count'));
+      var dec = parseInt(el.getAttribute('data-decimals') || '0', 10);
+      var suffix = el.getAttribute('data-suffix') || '';
+      if (reduceMotion || !isFinite(target)) { el.textContent = target.toFixed(dec) + suffix; return; }
+      var start = performance.now(), d = 900;
+      var tick = function (now) {
+        var t = Math.min(1, (now - start) / d), e = 1 - Math.pow(1 - t, 3);
+        el.textContent = (target * e).toFixed(dec) + suffix;
+        if (t < 1) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
   }
   function setCrumbs(parts) {
-    crumbs.innerHTML = parts.map((p, i) => (p.href ? '<a href="' + esc(p.href) + '">' + esc(p.label) + '</a>' : '<span>' + esc(p.label) + '</span>') + (i < parts.length - 1 ? '<span class="muted">/</span>' : '')).join('');
+    crumbs.innerHTML = parts.map(function (p) {
+      return I.chevron + (p.href ? '<a href="' + esc(p.href) + '">' + esc(p.label) + '</a>' : '<span>' + esc(p.label) + '</span>');
+    }).join('');
   }
   function stopLive() {
     if (timer) { clearInterval(timer); timer = null; }
     if (source) { source.close(); source = null; }
   }
+  function busy(btn, label) {
+    btn.disabled = true;
+    btn.innerHTML = I.ring + '<span>' + esc(label) + '</span>';
+  }
 
   // ---------- modal ----------
-  function modal(html, onMount) {
-    const root = document.getElementById('modal-root');
-    root.innerHTML = '<div class="modal-back"><div class="modal" role="dialog">' + html + '</div></div>';
-    const onKey = (e) => { if (e.key === 'Escape') close(); };
-    const close = () => { root.innerHTML = ''; document.removeEventListener('keydown', onKey); };
+  function modal(o, onMount) {
+    var root = document.getElementById('modal-root');
+    root.innerHTML = '<div class="modal-layer"><div class="modal-back" data-close></div>' +
+      '<div class="modal card" role="dialog" aria-modal="true" style="max-width:' + (o.width || 520) + 'px">' +
+      '<div class="m-head"><div class="t">' + o.title + '</div><button class="btn icon ghost" data-close aria-label="Close dialog">' + I.x + '</button></div>' +
+      '<div class="m-body">' + o.body + '</div>' + (o.footer ? '<div class="m-foot">' + o.footer + '</div>' : '') + '</div></div>';
+    var onKey = function (e) { if (e.key === 'Escape') close(); };
+    var close = function () { root.innerHTML = ''; document.removeEventListener('keydown', onKey); };
     document.addEventListener('keydown', onKey);
-    root.querySelector('.modal-back').addEventListener('click', (e) => { if (e.target.classList.contains('modal-back')) close(); });
-    root.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', close));
+    Array.prototype.forEach.call(root.querySelectorAll('[data-close]'), function (b) { b.addEventListener('click', close); });
     if (onMount) onMount(root, close);
     return close;
   }
 
   // ---------- overview ----------
-  async function renderOverview() {
+  function skeletonCard(i) {
+    var rows = [68, 84, 56, 62, 74, 70].map(function (w, j) {
+      return '<div class="row"><div class="skel" style="width:' + w + 'px;height:10px"></div><div class="skel" style="width:' + (90 - j * 4) + 'px;height:10px"></div></div>';
+    }).join('');
+    return '<div class="card pad skel-card" style="--i:' + i + '"><div style="display:flex;gap:8px;align-items:center"><div class="skel" style="width:72px;height:20px;border-radius:999px"></div><div class="skel" style="width:150px;height:16px"></div></div>' +
+      '<div class="skel" style="width:72%;height:11px;margin-top:12px"></div><div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--gr-border)">' + rows + '</div></div>';
+  }
+  function renderOverview() {
     stopLive();
+    envView = null;
     setCrumbs([{ label: 'Environments' }]);
-    const draw = async () => {
-      const data = await api('/api/v1/overview');
-      const envs = data.environments || [];
-      let html = '<div class="page-head"><div><h1>Demo environments</h1><div class="sub">' + envs.length + ' environment' + (envs.length === 1 ? '' : 's') + ' in ' + esc(data.environmentsDir) + ', probed every ' + esc(data.probeInterval) + '</div></div></div>';
-      if (data.loadError) html += '<div class="error-box"><b>Some environments failed to load.</b><br><span class="mono">' + esc(data.loadError) + '</span></div>';
-      if (!envs.length) {
-        html += '<div class="empty">No environments yet. Create <code>environments/&lt;name&gt;/environment.json</code> or run <code>greenroom init</code>.</div>';
-      } else {
-        html += '<div class="grid">' + envs.map((e) => envCard(e)).join('') + '</div>';
-      }
-      app.innerHTML = html;
+    app.innerHTML = '<div class="spotlight"></div><div class="page"><header class="rise"><h1>Demo environments</h1><div class="skel" style="width:340px;height:12px;margin-top:10px"></div></header>' +
+      '<div class="grid stagger">' + [0, 1, 2].map(skeletonCard).join('') + '</div></div>';
+    var first = true;
+    var draw = function () {
+      return api('/api/v1/overview').then(function (data) {
+        var envs = data.environments || [];
+        var html = '<div class="spotlight"></div><div class="page' + (first ? '' : ' static') + '">' +
+          '<header class="page-head rise"><div><h1>Demo environments</h1><div class="sub">' + envs.length + ' environment' + (envs.length === 1 ? '' : 's') + ' in <span class="mono dim">' + esc(data.environmentsDir) + '</span>, probed every <span class="mono dim">' + esc(data.probeInterval) + '</span></div></div></header>';
+        if (data.loadError) html += '<div class="alert rise">' + I.alert + '<div><b>Some environments failed to load</b><span class="small dim mono">' + esc(data.loadError) + '</span></div></div>';
+        if (!envs.length) {
+          html += '<div class="card empty rise" style="margin-top:24px"><span class="icon-tile">' + I.folder + '</span><h2>No environments yet</h2><p>Create <span class="mono dim">environments/&lt;name&gt;/environment.json</span> or run <span class="mono dim">greenroom init</span>.</p></div>';
+        } else {
+          html += '<div class="grid stagger">' + envs.map(envCard).join('') + '</div>';
+        }
+        app.innerHTML = html + '</div>';
+        first = false;
+      });
     };
-    await draw();
-    timer = setInterval(() => draw().catch(() => {}), 30000);
+    draw().catch(function (e) { app.innerHTML = '<div class="alert">' + I.alert + '<div><b>Could not load</b>' + esc(e.message) + '</div></div>'; });
+    timer = setInterval(function () { draw().catch(function () {}); }, 30000);
   }
 
-  function envCard(e) {
-    const applied = e.applied ? esc(e.applied.setId) + ' <span class="muted">' + ago(e.applied.at) + '</span>' : '<span class="muted">never reset</span>';
-    return '<a class="card link" href="#/env/' + esc(e.name) + '">' +
-      '<h2>' + readinessBadge(e.readiness) + esc(e.title) + (e.busy ? ' <span class="pill on">busy</span>' : '') + '</h2>' +
-      '<div class="muted small" style="margin-top:4px">' + esc(e.summary) + '</div>' +
-      '<dl class="meta">' +
-      '<dt>Pinned</dt><dd>' + esc(e.pinned || 'none') + '</dd>' +
-      '<dt>Applied</dt><dd>' + applied + '</dd>' +
-      '<dt>Dependencies</dt><dd>' + e.deps + (e.down ? ' <span class="badge red">' + e.down + ' down</span>' : '') + (e.warn ? ' <span class="badge amber">' + e.warn + ' warn</span>' : '') + '</dd>' +
-      '<dt>Stale</dt><dd>' + (e.stale ? '<span class="badge amber">' + e.stale + ' item' + (e.stale === 1 ? '' : 's') + '</span>' : '<span class="badge green">fresh</span>') + '</dd>' +
-      '<dt>Uptime 24h</dt><dd>' + (e.lastProbe ? pct(e.uptime24h) : '<span class="muted">no samples</span>') + '</dd>' +
-      '<dt>Owner</dt><dd>' + esc(e.owner || '') + '</dd>' +
+  function envCard(e, i) {
+    var applied = e.applied ? '<b class="mono">' + esc(e.applied.setId) + '</b> <span class="muted">· ' + ago(e.applied.at) + '</span>' : '<span class="muted">never reset</span>';
+    var chips = (e.down ? ' ' + chip('red', e.down + ' down') : '') + (e.warn ? ' ' + chip('amber', e.warn + ' warn') : '');
+    return '<a class="card link env-card pad" href="#/env/' + esc(e.name) + '" style="--i:' + i + '">' +
+      '<h2>' + readinessBadge(e.readiness) + '<span class="title"><b>' + esc(e.title) + '</b><span>' + esc(e.summary) + '</span></span>' +
+      (e.busy ? badge('blue', 'busy', { dot: true }) : '') + '</h2>' +
+      '<dl>' +
+      '<div><dt>Pinned</dt><dd><b class="mono">' + esc(e.pinned || 'none') + '</b></dd></div>' +
+      '<div><dt>Applied</dt><dd>' + applied + '</dd></div>' +
+      '<div><dt>Dependencies</dt><dd><b class="num">' + e.deps + '</b>' + chips + '</dd></div>' +
+      '<div><dt>Stale</dt><dd style="color:' + (e.stale ? 'var(--gr-amber)' : 'var(--gr-green)') + '">' + (e.stale ? e.stale + ' item' + (e.stale === 1 ? '' : 's') : 'fresh') + '</dd></div>' +
+      '<div><dt>Uptime 24h</dt><dd>' + (e.lastProbe ? '<b class="num">' + pct(e.uptime24h) + '</b>' : '<span class="muted">no samples</span>') + '</dd></div>' +
+      '<div><dt>Owner</dt><dd>' + esc(e.owner || '') + '</dd></div>' +
       '</dl></a>';
   }
 
   // ---------- environment ----------
-  async function renderEnv(name, tab) {
-    stopLive();
-    tab = tab || 'deps';
-    const draw = async (drift) => {
-      const d = await api('/api/v1/environments/' + encodeURIComponent(name) + (drift ? '?drift=true' : ''));
-      setCrumbs([{ label: 'Environments', href: '#/' }, { label: d.title }]);
-      const tabs = [
-        ['deps', 'Dependencies', d.deps], ['seeds', 'Seed sets', d.seeds.length], ['stale', 'Stale', d.stale ? d.stale.items.length : 0],
-        ['runs', 'Runs', d.runs.length], ['targets', 'Targets', d.targets.length],
-      ];
-      let html = '<div class="page-head"><div><h1>' + readinessBadge(d.readiness, true) + ' ' + esc(d.title) + '</h1>' +
-        '<div class="sub">' + esc(d.summary) + (d.lastProbe ? ' <span class="muted">(probed ' + ago(d.lastProbe) + ')</span>' : '') + '</div>' +
-        (d.description ? '<div class="muted" style="margin-top:6px">' + esc(d.description) + '</div>' : '') + '</div>' +
-        '<div class="actions">' +
-        '<button class="btn" id="act-check">Pre-call check</button>' +
-        '<button class="btn primary" id="act-reset"' + (d.busy ? ' disabled' : '') + '>Reset to known good</button>' +
-        '</div></div>';
-      if (d.busy) html += '<div class="error-box" style="border-color:var(--accent);background:rgba(110,168,254,.1)">A run is in progress: <a href="#/env/' + esc(name) + '/run/' + esc(d.busy) + '">' + esc(d.busy) + '</a></div>';
-      if (d.problems && d.problems.length) html += '<div class="error-box">' + d.problems.map(esc).join('<br>') + '</div>';
-      html += '<div class="stats">' +
-        stat(d.pinned || 'none', 'pinned seed set') +
-        stat(d.applied ? d.applied.setId : 'none', 'applied' + (d.applied ? ', ' + ago(d.applied.at) : '')) +
-        stat(d.deps + (d.down ? ' <span class="badge red">' + d.down + ' down</span>' : ''), 'dependencies') +
-        stat(d.lastProbe ? pct(d.uptime24h) : 'n/a', 'uptime 24h, all dependencies') +
-        stat(d.stale ? d.stale.stale : 0, 'stale items (limit ' + esc(d.staleAfter) + ')') +
-        '</div>';
-      html += '<div class="tabs">' + tabs.map((t) => '<a href="#/env/' + esc(name) + '/' + t[0] + '" class="' + (t[0] === tab ? 'active' : '') + '">' + t[1] + '<span class="pill count">' + t[2] + '</span></a>').join('') + '</div>';
-      switch (tab) {
-        case 'seeds': html += seedsTab(d); break;
-        case 'stale': html += staleTab(d, drift); break;
-        case 'runs': html += runsTab(d); break;
-        case 'targets': html += '<div id="targets-tab">' + targetsTab(d, null) + '</div>'; break;
-        default: html += depsTab(d);
-      }
-      app.innerHTML = html;
-      wireEnv(d, name, tab, draw);
-      if (tab === 'targets') loadTargets(name, d);
-    };
-    await draw(false);
-    timer = setInterval(() => draw(false).catch(() => {}), 30000);
+  var TABS = [['deps', 'Dependencies'], ['seeds', 'Seed sets'], ['stale', 'Stale'], ['runs', 'Runs'], ['targets', 'Targets']];
+  function tabCounts(d) {
+    return { deps: d.deps, seeds: d.seeds.length, stale: d.stale ? d.stale.items.length : 0, runs: d.runs.length, targets: d.targets.length };
+  }
+  function stat(i, label, value, hint, cls, count) {
+    var v = count ? '<div class="value ' + (cls || '') + '" data-count="' + count.v + '" data-decimals="' + (count.d || 0) + '" data-suffix="' + esc(count.s || '') + '">' + count.v.toFixed(count.d || 0) + esc(count.s || '') + '</div>'
+      : '<div class="value ' + (cls || '') + '">' + value + '</div>';
+    return '<div class="card stat" style="--i:' + i + '"><div class="label">' + esc(label) + '</div>' + v + (hint ? '<div class="hint">' + esc(hint) + '</div>' : '') + '</div>';
+  }
+  function statsHtml(d) {
+    var stale = d.stale ? d.stale.stale : 0;
+    return stat(0, 'Pinned seed set', '<span class="mono">' + esc(d.pinned || 'none') + '</span>', '', 'mono green') +
+      stat(1, 'Applied', '<span class="mono">' + esc(d.applied ? d.applied.setId : 'none') + '</span>', d.applied ? ago(d.applied.at) : 'never reset', 'mono') +
+      stat(2, 'Dependencies', '', d.down ? d.down + ' down' : d.warn ? d.warn + ' warn' : 'all up', d.down ? 'amber' : '', { v: d.deps }) +
+      stat(3, 'Uptime 24h', '', d.lastProbe ? 'all dependencies' : 'no samples yet', '', { v: d.lastProbe ? d.uptime24h : 0, d: 2, s: '%' }) +
+      stat(4, 'Stale items', '', 'limit ' + d.staleAfter, stale ? 'amber' : '', { v: stale });
+  }
+  function headHtml(d) {
+    return ring(d.readiness) +
+      '<div class="titles"><h1>' + esc(d.title) + '</h1><p>' + esc(d.summary) + (d.lastProbe ? ' <span class="muted">(probed ' + ago(d.lastProbe) + ')</span>' : '') + '</p>' +
+      (d.description ? '<p class="desc">' + esc(d.description) + '</p>' : '') + '</div>' +
+      '<div class="actions"><button class="btn" id="act-check"><span>Pre-call check</span></button>' +
+      '<button class="btn primary shimmer" id="act-reset"' + (d.busy ? ' disabled' : '') + '><span>Reset to known good</span></button></div>';
+  }
+  function noticesHtml(d, name) {
+    var html = '';
+    if (d.busy) html += '<div class="alert info rise">' + I.info + '<div><b>A run is in progress</b><a href="#/env/' + esc(name) + '/run/' + esc(d.busy) + '" class="mono small">' + esc(d.busy) + '</a></div></div>';
+    if (d.problems && d.problems.length) html += '<div class="alert rise">' + I.alert + '<div><b>Configuration problems</b>' + d.problems.map(esc).join('<br>') + '</div></div>';
+    return html;
+  }
+  function tabsHtml(name, d, tab) {
+    var counts = tabCounts(d);
+    return '<div class="tabs"><div class="list">' + TABS.map(function (t) {
+      return '<a href="#/env/' + esc(name) + '/' + t[0] + '" data-tab="' + t[0] + '" class="' + (t[0] === tab ? 'active' : '') + '">' + t[1] + '<span class="count">' + counts[t[0]] + '</span></a>';
+    }).join('') + '<span class="tab-indicator"></span></div></div>';
+  }
+  function positionIndicator(animate) {
+    var bar = app.querySelector('.tab-indicator');
+    var active = app.querySelector('.tabs a.active');
+    if (!bar || !active) return;
+    if (!animate) bar.style.transition = 'none';
+    bar.style.transform = 'translateX(' + active.offsetLeft + 'px)';
+    bar.style.width = active.offsetWidth + 'px';
+    if (!animate) requestAnimationFrame(function () { bar.style.transition = ''; });
+    // Keep the active tab in view when the strip scrolls on narrow screens.
+    var list = active.parentNode;
+    if (list && list.scrollWidth > list.clientWidth) {
+      var left = active.offsetLeft, right = left + active.offsetWidth;
+      if (left < list.scrollLeft) list.scrollLeft = Math.max(0, left - 12);
+      else if (right > list.scrollLeft + list.clientWidth) list.scrollLeft = right - list.clientWidth + 12;
+    }
   }
 
-  function stat(v, label) { return '<div class="card stat"><b>' + v + '</b><span>' + esc(label) + '</span></div>'; }
+  function renderEnv(name, tab) {
+    tab = tab || 'deps';
+    if (envView && envView.name === name && envView.data && app.querySelector('#panel')) {
+      envView.tab = tab;
+      Array.prototype.forEach.call(app.querySelectorAll('.tabs a'), function (a) { a.classList.toggle('active', a.getAttribute('data-tab') === tab); });
+      positionIndicator(true);
+      renderPanel(true);
+      return;
+    }
+    stopLive();
+    envView = { name: name, tab: tab, data: null, drift: false };
+    setCrumbs([{ label: 'Environments', href: '#/' }, { label: name }]);
+    app.innerHTML = '<div class="spotlight"></div><div class="page"><header class="env-head rise"><div class="ringwrap"><div class="skel" style="width:72px;height:24px;border-radius:999px"></div></div><div class="titles"><div class="skel" style="width:280px;height:22px"></div><div class="skel" style="width:360px;height:12px;margin-top:10px"></div></div></header>' +
+      '<div class="stats stagger">' + [0, 1, 2, 3, 4].map(function (i) { return '<div class="card stat" style="--i:' + i + '"><div class="skel" style="width:80px;height:10px"></div><div class="skel" style="width:60px;height:18px;margin-top:8px"></div></div>'; }).join('') + '</div></div>';
+    var draw = function (first, drift) {
+      var v = envView;
+      return api('/api/v1/environments/' + encodeURIComponent(name) + (drift ? '?drift=true' : '')).then(function (d) {
+        if (envView !== v) return;
+        v.data = d;
+        v.drift = !!drift;
+        setCrumbs([{ label: 'Environments', href: '#/' }, { label: d.title }]);
+        if (first) {
+          app.innerHTML = '<div class="spotlight"></div><div class="page">' +
+            '<header class="env-head rise" id="env-head">' + headHtml(d) + '</header><div id="notices">' + noticesHtml(d, name) + '</div>' +
+            '<div class="stats stagger" id="stats">' + statsHtml(d) + '</div>' + tabsHtml(name, d, v.tab) +
+            '<div class="panel" id="panel"></div></div>';
+          countUp(app);
+          positionIndicator(false);
+          renderPanel(true);
+        } else {
+          var head = document.getElementById('env-head');
+          if (head) { head.innerHTML = headHtml(d); head.classList.add('static'); }
+          var notices = document.getElementById('notices');
+          if (notices) notices.innerHTML = noticesHtml(d, name);
+          var stats = document.getElementById('stats');
+          if (stats) { stats.classList.add('static'); stats.innerHTML = statsHtml(d); }
+          var counts = tabCounts(d);
+          Array.prototype.forEach.call(app.querySelectorAll('.tabs a'), function (a) { a.querySelector('.count').textContent = counts[a.getAttribute('data-tab')]; });
+          renderPanel(false);
+        }
+        wireHead(name);
+      });
+    };
+    envView.draw = draw;
+    draw(true, false).catch(function (e) { app.innerHTML = '<div class="alert">' + I.alert + '<div><b>Could not load environment</b>' + esc(e.message) + '</div></div>'; });
+    timer = setInterval(function () { draw(false, false).catch(function () {}); }, 30000);
+  }
+
+  function renderPanel(animate) {
+    var v = envView, d = v.data, panel = document.getElementById('panel');
+    if (!panel || !d) return;
+    var html = '';
+    switch (v.tab) {
+      case 'seeds': html = seedsTab(d); break;
+      case 'stale': html = staleTab(d, v.drift); break;
+      case 'runs': html = runsTab(d); break;
+      case 'targets': html = '<div id="targets-tab">' + targetsTab(d, v.targetStatus || null) + '</div>'; break;
+      default: html = depsTab(d);
+    }
+    panel.className = 'panel ' + (animate ? 'rise' : 'static');
+    panel.innerHTML = html;
+    wirePanel(v.name);
+    if (v.tab === 'targets' && !v.targetStatus) loadTargets(v.name);
+  }
 
   function depsTab(d) {
-    if (!d.dependencies.length) return '<div class="empty">No dependencies.</div>';
-    const rows = d.dependencies.map((dep) => {
-      const l = dep.latest;
-      const st = !l ? badge('grey', 'not probed') : !l.ok ? badge('red', 'down') : l.warn ? badge('amber', 'warn') : badge('green', 'up');
-      const target = dep.address || dep.url || dep.container || dep.resource || dep.instanceId || (dep.dsn ? dep.dsn : '') || (dep.via ? 'via ' + dep.via.target : '') || (dep.command ? dep.command.join(' ') : '');
-      const u = dep.uptime24h, u7 = dep.uptime7d;
-      const inc = u.incidents.filter((i) => i.open).length;
-      const detail = l && l.detail ? Object.entries(l.detail).filter(([k]) => ['version', 'status', 'image', 'ready', 'desired', 'state', 'daysLeft', 'health', 'privateIp', 'phase'].includes(k)).map(([k, v]) => k + '=' + (Array.isArray(v) ? v.join(',') : v)).join('  ') : '';
-      return '<tr>' +
-        '<td><div class="dep-name">' + esc(dep.title || dep.name) + (dep.critical ? ' <span class="pill">critical</span>' : '') + (dep.autoHeal ? ' <span class="pill">auto-heal</span>' : '') + '</div><div class="dep-kind">' + esc(dep.kind) + ' <span class="mono">' + esc(target) + '</span></div></td>' +
-        '<td>' + st + (l ? '<div class="small muted" style="margin-top:3px">' + esc(l.message) + '</div>' : '') + (detail ? '<div class="small mono muted">' + esc(detail) + '</div>' : '') + '</td>' +
-        '<td class="num">' + (l ? dur(l.latency) : '') + '</td>' +
-        '<td>' + spark(u.points) + '<div class="small muted">' + (u.total ? pct(u.percent) + ' of ' + u.total + (inc ? ', <span style="color:var(--red)">incident open</span>' : '') : 'no samples') + '</div></td>' +
-        '<td class="num">' + (u7.total ? pct(u7.percent) : '') + '</td>' +
-        '<td><div class="actions">' +
-        (dep.hasHeal ? '<button class="btn small" data-heal="' + esc(dep.name) + '">Heal (' + esc(dep.heal.action) + ')</button>' : '') +
-        (dep.canSnapshot ? '<button class="btn small" data-snap="' + esc(dep.name) + '" title="' + (dep.lastSnapshot ? 'last snapshot ' + esc(ago(dep.lastSnapshot.at)) : 'no snapshot yet') + '">Snapshot</button>' : '') +
-        '</div>' + (dep.hasReset ? '<div class="small muted">reset: ' + esc(dep.reset.strategy) + '</div>' : '') + '</td>' +
-        '</tr>';
+    if (!d.dependencies.length) return '<div class="card empty"><h2>No dependencies</h2></div>';
+    var rows = d.dependencies.map(function (dep, i) {
+      var l = dep.latest;
+      var st = !l ? badge('grey', 'not probed') : !l.ok ? badge('red', 'down', { dot: true }) : l.warn ? badge('amber', 'warn', { dot: true }) : badge('green', 'up', { dot: true });
+      var target = dep.address || dep.url || dep.container || dep.resource || dep.instanceId || dep.dsn || (dep.via ? 'via ' + dep.via.target : '') || (dep.command ? dep.command.join(' ') : '');
+      var u = dep.uptime24h, u7 = dep.uptime7d;
+      var inc = u.incidents.filter(function (x) { return x.open; }).length;
+      var detail = l && l.detail ? Object.keys(l.detail).filter(function (k) { return ['version', 'status', 'image', 'ready', 'desired', 'state', 'daysLeft', 'health', 'privateIp', 'phase'].indexOf(k) >= 0; })
+        .map(function (k) { var val = l.detail[k]; return k + '=' + (Array.isArray(val) ? val.join(',') : val); }).join('  ') : '';
+      return '<tr style="--i:' + i + '">' +
+        '<td><div class="dep-name">' + esc(dep.title || dep.name) + (dep.critical ? chip('red', 'critical') : '') + (dep.autoHeal ? chip('blue', 'auto-heal') : '') + '</div>' +
+        '<div class="dep-kind"><span>' + esc(dep.kind) + '</span><span class="mono" title="' + esc(target) + '">' + esc(target) + '</span></div></td>' +
+        '<td><div class="status-line">' + st + (l ? '<span>' + esc(l.message) + '</span>' : '') + '</div>' + (detail ? '<div class="detail">' + esc(detail) + '</div>' : '') + '</td>' +
+        '<td class="num nowrap">' + (l ? dur(l.latency) : '') + '</td>' +
+        '<td>' + spark(u.points, 24) + '<div class="small muted num" style="margin-top:4px">' + (u.total ? pct(u.percent) + ' of ' + u.total + (inc ? ', <span style="color:var(--gr-red)">incident open</span>' : '') : 'no samples') + '</div></td>' +
+        '<td class="num nowrap">' + (u7.total ? pct(u7.percent) : '') + '</td>' +
+        '<td><div class="cell-actions"><div class="row">' +
+        (dep.hasHeal ? '<button class="btn small" data-heal="' + esc(dep.name) + '"><span>Heal (' + esc(dep.heal.action) + ')</span></button>' : '') +
+        (dep.canSnapshot ? '<button class="btn small ghost" data-snap="' + esc(dep.name) + '" title="' + (dep.lastSnapshot ? 'last snapshot ' + esc(ago(dep.lastSnapshot.at)) : 'no snapshot yet') + '"><span>Snapshot</span></button>' : '') +
+        '</div>' + (dep.hasReset ? '<span class="xs muted mono">reset: ' + esc(dep.reset.strategy) + '</span>' : '') + '</div></td></tr>';
     }).join('');
-    return '<div class="table-wrap"><table><thead><tr><th>Dependency</th><th>Status</th><th class="num">Latency</th><th>Uptime 24h</th><th class="num">7d</th><th>Actions</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
-      (d.heals.length ? '<div class="section"><div class="section-head"><h2>Recent heals</h2></div><div class="table-wrap"><table><thead><tr><th>When</th><th>Dependency</th><th>Action</th><th>Trigger</th><th>Result</th></tr></thead><tbody>' +
-        d.heals.map((h) => '<tr><td>' + esc(when(h.at)) + '</td><td>' + esc(h.dep) + '</td><td>' + esc(h.action) + '</td><td>' + (h.auto ? 'automatic' : 'manual') + '</td><td>' + (h.ok ? badge('green', 'ok') : badge('red', 'failed') + ' <span class="small muted">' + esc(h.error || '') + '</span>') + '</td></tr>').join('') +
-        '</tbody></table></div></div>' : '');
+    var heals = d.heals.length ? '<section class="card table-wrap section" style="--i:1"><div class="table-title"><h3>Recent heals</h3></div><div class="scroll"><table class="heals" style="min-width:720px"><thead><tr><th>When</th><th>Dependency</th><th>Action</th><th>Trigger</th><th>Result</th></tr></thead><tbody>' +
+      d.heals.map(function (h, i) {
+        return '<tr style="--i:' + i + '"><td class="mono small muted nowrap">' + esc(when(h.at)) + '</td><td>' + esc(h.dep) + '</td><td class="mono small">' + esc(h.action) + '</td><td>' + chip(h.auto ? 'blue' : 'grey', h.auto ? 'automatic' : 'manual') + '</td><td>' + (h.ok ? badge('green', 'ok') : badge('red', 'failed') + ' <span class="small muted">' + esc(h.error || '') + '</span>') + '</td></tr>';
+      }).join('') + '</tbody></table></div></section>' : '';
+    return '<div class="stagger"><section class="card table-wrap" style="--i:0"><div class="scroll"><table style="min-width:1080px"><thead><tr><th style="width:27%">Dependency</th><th style="width:27%">Status</th><th>Latency</th><th style="width:17%">Uptime 24h</th><th>7d</th><th class="num">Actions</th></tr></thead><tbody>' + rows + '</tbody></table></div></section>' + heals + '</div>';
   }
 
   function seedsTab(d) {
-    if (!d.seeds.length) return '<div class="empty">No seed sets. Add <code>seeds/&lt;persona&gt;/v1/seed.json</code> under the environment directory.</div>';
-    const personas = {};
-    d.seeds.forEach((s) => {
+    if (!d.seeds.length) return '<div class="card empty"><span class="icon-tile">' + I.folder + '</span><h2>No seed sets</h2><p>Add <span class="mono dim">seeds/&lt;persona&gt;/v1/seed.json</span> under the environment directory.</p></div>';
+    var personas = {};
+    d.seeds.forEach(function (s) {
       s.problems = s.problems || []; s.tags = s.tags || []; s.verify = s.verify || []; s.files = s.files || []; s.steps = s.steps || [];
       (personas[s.persona] = personas[s.persona] || []).push(s);
     });
-    return Object.entries(personas).map(([p, sets]) => {
-      return '<div class="section"><div class="section-head"><h2>Persona: ' + esc(p) + '</h2><span class="muted small">' + sets.length + ' version' + (sets.length === 1 ? '' : 's') + '</span></div>' +
-        sets.slice().reverse().map((s) => '<div class="card" style="margin-bottom:10px"><h2>' + esc(s.id) + ' <span class="muted" style="font-weight:400">' + esc(s.title) + '</span>' +
-          (s.pinned ? ' <span class="pill on">pinned</span>' : '') + (s.applied ? ' <span class="pill on">applied' + (s.changed ? ', files changed since' : '') + '</span>' : '') + (s.latest ? ' <span class="pill">latest</span>' : '') +
-          '<span class="spacer"></span><button class="btn small" data-reset-persona="' + esc(s.persona) + '" data-reset-version="' + s.version + '">Apply</button></h2>' +
-          (s.description ? '<div class="muted" style="margin:6px 0">' + esc(s.description) + '</div>' : '') +
-          (s.problems.length ? '<div class="error-box">' + s.problems.map(esc).join('<br>') + '</div>' : '') +
-          '<div class="two"><div><h3>Steps</h3><ol style="margin:6px 0 0 18px;padding:0">' + s.steps.map((st) => '<li><b>' + esc(st.name) + '</b> <span class="muted">' + esc(st.kind) + (st.dependency ? ' on ' + esc(st.dependency) : '') + (st.target ? ' via ' + esc(st.target) : '') + (st.file ? ' ' : '') + '</span>' + (st.file ? '<span class="mono">' + esc(st.file) + '</span>' : '') + '</li>').join('') + '</ol>' +
-          (s.verify && s.verify.length ? '<h3 style="margin-top:8px">Verify</h3><ul style="margin:6px 0 0 18px;padding:0">' + s.verify.map((c) => '<li>' + esc(c.name) + ' <span class="muted">' + esc(c.kind) + '</span></li>').join('') + '</ul>' : '') +
-          '</div><div><h3>Files</h3><ul class="files plain">' + s.files.map((f) => '<li class="mono">' + esc(f.path) + ' <span class="muted">' + f.size + ' B</span></li>').join('') + '</ul><div class="small muted mono" style="margin-top:6px">hash ' + esc(s.hash.slice(0, 16)) + '</div></div></div></div>').join('') + '</div>';
-    }).join('');
+    return '<div class="stagger">' + Object.keys(personas).map(function (p, gi) {
+      var sets = personas[p];
+      return '<section class="persona" style="--i:' + gi + '"><div class="persona-head"><h2>Persona: <span class="mono">' + esc(p) + '</span></h2><span class="small muted num">' + sets.length + ' version' + (sets.length === 1 ? '' : 's') + '</span></div>' +
+        sets.slice().reverse().map(function (s, i) {
+          var stepDetail = function (st) { return st.file || st.url || (st.command ? st.command.join(' ') : '') || (st.sql ? 'inline sql' : '') || (st.script ? 'inline script' : ''); };
+          return '<article class="card seed" style="--i:' + i + '"><div class="head"><div style="min-width:0"><div class="id">' + esc(s.id) +
+            (s.pinned ? badge('green', 'pinned') : '') + (s.applied ? badge('blue', s.changed ? 'applied, files changed since' : 'applied') : '') + (s.latest ? badge('grey', 'latest') : '') + '</div>' +
+            '<div class="title">' + esc(s.title) + '</div></div>' +
+            '<button class="btn small' + (s.pinned ? ' primary' : '') + '" data-reset-persona="' + esc(s.persona) + '" data-reset-version="' + s.version + '"><span>Apply</span></button></div>' +
+            (s.description ? '<p class="desc">' + esc(s.description) + '</p>' : '') +
+            (s.problems.length ? '<div class="alert">' + I.alert + '<div><b>Problems</b>' + s.problems.map(esc).join('<br>') + '</div></div>' : '') +
+            '<div class="cols"><div><h4>Steps</h4><ol>' + s.steps.map(function (st, k) {
+              return '<li><span class="n">' + (k + 1) + '</span><span style="min-width:0"><b>' + esc(st.name) + '</b> <span class="muted">' + esc(st.kind) + (st.dependency ? ' on ' + esc(st.dependency) : '') + (st.target ? ' via ' + esc(st.target) : '') + '</span><span class="file">' + esc(stepDetail(st)) + '</span></span></li>';
+            }).join('') + '</ol></div>' +
+            '<div><h4>Verify</h4>' + (s.verify.length ? '<ul>' + s.verify.map(function (c) { return '<li><span style="min-width:0"><b>' + esc(c.name) + '</b> <span class="muted">' + esc(c.kind) + '</span>' + (c.query ? '<span class="file">' + esc(c.query) + '</span>' : c.url ? '<span class="file">' + esc(c.url) + '</span>' : '') + '</span></li>'; }).join('') + '</ul>' : '<p class="small muted" style="margin-top:8px">none</p>') + '</div>' +
+            '<div><h4>Files</h4><ul class="files">' + s.files.map(function (f) { return '<li><span class="mono dim" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(f.path) + '</span><span class="xs muted num">' + f.size + ' B</span></li>'; }).join('') + '</ul>' +
+            '<div class="hash">hash <span class="mono dim">' + esc(s.hash.slice(0, 16)) + '</span></div></div></div></article>';
+        }).join('') + '</section>';
+    }).join('') + '</div>';
   }
 
   function staleTab(d, drift) {
-    const s = d.stale;
-    let html = '<div class="section-head"><div>' + (s && s.fresh ? badge('green', 'fresh') : badge('amber', (s ? s.stale : 0) + ' stale')) + ' <span class="muted small">' + (drift ? 'drift queries included' : 'drift queries not run; use the button to include them') + '</span></div>' +
-      '<button class="btn" id="act-stale">Check with drift queries</button></div>';
-    if (!s || !s.items.length) return html + '<div class="empty">Nothing stale. The applied seed set matches the pin, the files, and the fingerprints.</div>';
-    const sev = { stale: 'amber', warn: 'amber', info: 'blue' };
-    html += '<div class="card">' + s.items.map((it) => '<div class="stale-item"><span class="sev">' + badge(it.severity === 'stale' ? 'red' : sev[it.severity], it.severity) + '</span><div>' + (it.dep ? '<b>' + esc(it.dep) + '</b> ' : '') + esc(it.message) + (it.fix ? '<div class="fix">' + esc(it.fix) + '</div>' : '') + '</div></div>').join('') + '</div>';
-    if (s.applied) {
-      html += '<div class="section"><h2>Applied record</h2><div class="card" style="margin-top:8px"><dl class="kv">' +
-        '<dt>Seed set</dt><dd>' + esc(s.applied.setId) + '</dd><dt>Hash</dt><dd class="mono">' + esc(s.applied.setHash) + '</dd><dt>At</dt><dd>' + esc(when(s.applied.at)) + ' (' + ago(s.applied.at) + ')</dd><dt>Run</dt><dd><a href="#/env/' + esc(d.name) + '/run/' + esc(s.applied.runId) + '">' + esc(s.applied.runId) + '</a></dd><dt>By</dt><dd>' + esc(s.applied.actor || '') + '</dd>' +
-        '<dt>Fingerprints</dt><dd>' + Object.entries(s.applied.fingerprints || {}).map(([k, f]) => '<div><b>' + esc(k) + '</b> <span class="mono">' + esc(f.kind + ' ' + f.value) + (f.detail ? ' (' + esc(f.detail) + ')' : '') + '</span></div>').join('') + '</dd>' +
-        '<dt>Baselines</dt><dd>' + Object.entries(s.applied.baselines || {}).map(([k, m]) => Object.entries(m).map(([n, v]) => '<div><b>' + esc(k) + '</b>.' + esc(n) + ' = ' + esc(v) + '</div>').join('')).join('') + '</dd></dl></div></div>';
+    var s = d.stale;
+    var count = s ? s.stale : 0;
+    var html = '<div class="stale-grid stagger"><section style="--i:0"><div class="stale-head"><div style="display:flex;align-items:center;gap:10px">' +
+      badge(count === 0 ? 'green' : 'red', count === 0 ? 'fresh' : count + ' stale', { dot: true, size: 'md' }) +
+      '<span class="small muted">' + (drift ? 'drift queries included' : 'compared against the applied fingerprints; drift queries not run yet') + '</span></div>' +
+      '<button class="btn small" id="act-stale"><span>Check with drift queries</span></button></div>';
+    if (!s || !s.items.length) {
+      html += '<div class="card empty"><span class="icon-tile">' + I.check + '</span><h2>Nothing stale.</h2><p>' + (s && s.applied ? 'Every fingerprint matches what was recorded when <span class="mono dim">' + esc(s.applied.setId) + '</span> was applied.' : 'The applied seed set matches the pin and the files on disk.') + '</p></div>';
+    } else {
+      var sev = { stale: 'red', warn: 'amber', info: 'blue' };
+      html += '<div class="stagger">' + s.items.map(function (it, i) {
+        return '<div class="card stale-item" style="--i:' + i + '">' + badge(sev[it.severity] || 'grey', it.severity) + '<div style="min-width:0"><div>' + (it.dep ? '<b>' + esc(it.dep) + '</b> · ' : '') + esc(it.message) + '</div>' + (it.fix ? '<div class="fix">' + esc(it.fix) + '</div>' : '') + '</div></div>';
+      }).join('') + '</div>';
     }
-    return html;
+    html += '</section>';
+    if (s && s.applied) {
+      var a = s.applied;
+      html += '<aside class="card pad" style="--i:1;height:max-content"><h3>Applied record</h3><dl class="kv">' +
+        '<div><dt>Seed set</dt><dd class="mono" style="color:var(--gr-text)">' + esc(a.setId) + '</dd></div>' +
+        '<div><dt>Hash</dt><dd class="mono small">' + esc(a.setHash.slice(0, 24)) + '</dd></div>' +
+        '<div><dt>At</dt><dd class="small">' + esc(when(a.at)) + ' <span class="muted">(' + ago(a.at) + ')</span></dd></div>' +
+        '<div><dt>Run</dt><dd><a class="mono small" href="#/env/' + esc(d.name) + '/run/' + esc(a.runId) + '">' + esc(a.runId) + '</a></dd></div>' +
+        '<div><dt>By</dt><dd class="mono small">' + esc(a.actor || '') + '</dd></div></dl>' +
+        '<h4 style="margin-top:16px">Fingerprints</h4><ul class="plain">' + Object.keys(a.fingerprints || {}).map(function (k) { var f = a.fingerprints[k]; return '<li><b style="font-weight:600">' + esc(k) + '</b><span class="mono xs muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(f.kind + ' ' + f.value) + '</span></li>'; }).join('') + '</ul>' +
+        '<h4 style="margin-top:16px">Baselines</h4><ul class="plain">' + Object.keys(a.baselines || {}).map(function (k) { return Object.keys(a.baselines[k]).map(function (n) { return '<li class="mono small dim">' + esc(k + '.' + n) + ' = <span style="color:var(--gr-text)">' + esc(a.baselines[k][n]) + '</span></li>'; }).join(''); }).join('') + '</ul></aside>';
+    }
+    return html + '</div>';
   }
 
   function runsTab(d) {
-    if (!d.runs.length) return '<div class="empty">No runs yet.</div>';
-    return '<div class="table-wrap"><table><thead><tr><th>Started</th><th>Kind</th><th>Status</th><th>Summary</th><th class="num">Duration</th><th>By</th></tr></thead><tbody>' +
-      d.runs.map((r) => '<tr><td><a href="#/env/' + esc(d.name) + '/run/' + esc(r.id) + '">' + esc(when(r.startedAt)) + '</a><div class="small muted">' + ago(r.startedAt) + '</div></td><td>' + esc(r.kind) + (r.persona ? ' <span class="pill">' + esc(r.persona) + '@v' + r.version + '</span>' : '') + '</td><td>' + statusBadge(r.status) + (r.failed ? ' <span class="small muted">' + r.failed + ' failed</span>' : '') + '</td><td>' + esc(r.summary || r.error || '') + '</td><td class="num">' + dur(r.duration) + '</td><td>' + esc(r.actor || '') + '</td></tr>').join('') +
-      '</tbody></table></div>';
+    if (!d.runs.length) return '<div class="card empty"><h2>No runs yet</h2><p>Runs appear here after a check, reset, heal or snapshot.</p></div>';
+    return '<div class="stagger"><section class="card table-wrap" style="--i:0"><div class="scroll"><table style="min-width:920px"><thead><tr><th style="width:20%">Started</th><th>Kind</th><th>Status</th><th style="width:30%">Summary</th><th class="num">Duration</th><th>By</th></tr></thead><tbody>' +
+      d.runs.map(function (r, i) {
+        return '<tr style="--i:' + i + '"><td class="nowrap"><a class="mono small" href="#/env/' + esc(d.name) + '/run/' + esc(r.id) + '">' + esc(when(r.startedAt)) + '</a><div class="small muted">' + ago(r.startedAt) + '</div></td>' +
+          '<td>' + esc(r.kind) + (r.persona ? ' ' + chip('green', r.persona + '@v' + r.version) : '') + '</td><td>' + statusBadge(r.status) + (r.failed ? ' <span class="small muted">' + r.failed + ' failed</span>' : '') + '</td>' +
+          '<td>' + esc(r.summary || r.error || '') + '</td><td class="num nowrap">' + dur(r.duration) + '</td><td class="mono small muted nowrap">' + esc(r.actor || '') + '</td></tr>';
+      }).join('') + '</tbody></table></div></section></div>';
   }
 
   function targetsTab(d, status) {
-    if (!d.targets.length) return '<div class="empty">This environment declares no targets. Probes that need none (tcp, http, direct SQL) still work.</div>';
-    return '<div class="table-wrap"><table><thead><tr><th>Target</th><th>Kind</th><th>Endpoint</th><th>Connectivity</th></tr></thead><tbody>' +
-      d.targets.map((t) => {
-        const s = status && status.find((x) => x.name === t.name);
-        return '<tr><td class="dep-name">' + esc(t.name) + '</td><td>' + esc(t.kind) + '</td><td class="mono">' + esc(t.host || '') + '</td><td>' + (!status ? '<span class="muted">checking</span>' : s.ok ? badge('green', 'reachable') + ' <span class="small muted">' + esc(s.message) + ' (' + dur(s.latency) + ')</span>' : badge('red', 'unreachable') + ' <span class="small muted">' + esc(s.message) + '</span>') + '</td></tr>';
-      }).join('') + '</tbody></table></div>';
+    if (!d.targets.length) return '<div class="card empty"><h2>No targets</h2><p>This environment declares none. Probes that need none (tcp, http, direct SQL) still work.</p></div>';
+    return '<div class="stagger"><section class="card table-wrap" style="--i:0"><div class="scroll"><table style="min-width:860px"><thead><tr><th>Target</th><th>Kind</th><th style="width:34%">Endpoint</th><th style="width:34%">Connectivity</th></tr></thead><tbody>' +
+      d.targets.map(function (t, i) {
+        var s = status && status.filter(function (x) { return x.name === t.name; })[0];
+        var conn = !status ? '<span class="muted" style="display:inline-flex;align-items:center;gap:6px">' + I.ring + ' checking</span>'
+          : s.ok ? badge('green', 'reachable', { dot: true }) + ' <span class="mono xs muted">' + esc(s.message) + ' (' + dur(s.latency) + ')</span>'
+          : badge('red', 'unreachable', { dot: true }) + ' <span class="mono xs muted">' + esc(s.message) + '</span>';
+        return '<tr style="--i:' + i + '"><td style="color:var(--gr-text);font-weight:500">' + esc(t.name) + '</td><td>' + esc(t.kind) + '</td><td class="mono small">' + esc(t.host || '') + '</td><td>' + conn + '</td></tr>';
+      }).join('') + '</tbody></table></div></section></div>';
+  }
+  function loadTargets(name) {
+    var v = envView;
+    api('/api/v1/environments/' + encodeURIComponent(name) + '/targets').then(function (st) {
+      if (envView !== v) return;
+      v.targetStatus = st;
+      var el = document.getElementById('targets-tab');
+      if (el) el.innerHTML = targetsTab(v.data, st);
+    }).catch(function (e) { toast('Target check failed', 'error', e.message); });
   }
 
-  async function loadTargets(name, d) {
-    try {
-      const st = await api('/api/v1/environments/' + encodeURIComponent(name) + '/targets');
-      const el = document.getElementById('targets-tab');
-      if (el) el.innerHTML = targetsTab(d, st);
-    } catch (e) { toast(e.message, 'error'); }
-  }
-
-  function wireEnv(d, name, tab, draw) {
-    const check = document.getElementById('act-check');
-    if (check) check.addEventListener('click', async () => {
-      check.disabled = true; check.textContent = 'Checking';
-      try {
-        const rep = await api('/api/v1/environments/' + encodeURIComponent(name) + '/check?record=true&drift=true', { method: 'POST' });
+  function wireHead(name) {
+    var check = document.getElementById('act-check');
+    if (check) check.addEventListener('click', function () {
+      busy(check, 'Checking');
+      api('/api/v1/environments/' + encodeURIComponent(name) + '/check?record=true&drift=true', { method: 'POST' }).then(function (rep) {
         showCheck(name, rep);
-        draw(false).catch(() => {});
-      } catch (e) { toast(e.message, 'error'); }
-      check.disabled = false; check.textContent = 'Pre-call check';
+        if (envView && envView.draw) envView.draw(false, false).catch(function () {});
+      }).catch(function (e) { toast('Check failed', 'error', e.message); })
+        .then(function () { check.disabled = false; check.innerHTML = '<span>Pre-call check</span>'; });
     });
-    const reset = document.getElementById('act-reset');
-    if (reset) reset.addEventListener('click', () => resetDialog(d, name));
-    app.querySelectorAll('[data-reset-persona]').forEach((b) => b.addEventListener('click', () => resetDialog(d, name, b.dataset.resetPersona, parseInt(b.dataset.resetVersion, 10))));
-    app.querySelectorAll('[data-heal]').forEach((b) => b.addEventListener('click', async () => {
-      b.disabled = true;
-      try {
-        const r = await api('/api/v1/environments/' + encodeURIComponent(name) + '/dependencies/' + encodeURIComponent(b.dataset.heal) + '/heal', { method: 'POST' });
-        location.hash = '#/env/' + name + '/run/' + r.runId;
-      } catch (e) { toast(e.message, 'error'); b.disabled = false; }
-    }));
-    app.querySelectorAll('[data-snap]').forEach((b) => b.addEventListener('click', () => {
-      const dep = b.dataset.snap;
-      modal('<h2>Snapshot ' + esc(dep) + '</h2><p class="muted">Captures the current state of this dependency as the known-good baseline the reset strategy restores. For Postgres this clones the database into a template (sessions are terminated); for Docker it commits the container and archives its mounts (the container is stopped briefly).</p><div class="foot"><button class="btn" data-close>Cancel</button><button class="btn primary" id="snap-go">Capture snapshot</button></div>', (root, close) => {
-        root.querySelector('#snap-go').addEventListener('click', async () => {
-          try {
-            const r = await api('/api/v1/environments/' + encodeURIComponent(name) + '/snapshot', { method: 'POST', body: { dependency: dep } });
-            close();
-            location.hash = '#/env/' + name + '/run/' + r.runId;
-          } catch (e) { toast(e.message, 'error'); }
+    var reset = document.getElementById('act-reset');
+    if (reset) reset.addEventListener('click', function () { resetDialog(envView.data, name); });
+  }
+  function wirePanel(name) {
+    var panel = document.getElementById('panel');
+    if (!panel) return;
+    Array.prototype.forEach.call(panel.querySelectorAll('[data-reset-persona]'), function (b) {
+      b.addEventListener('click', function () { resetDialog(envView.data, name, b.getAttribute('data-reset-persona'), parseInt(b.getAttribute('data-reset-version'), 10)); });
+    });
+    Array.prototype.forEach.call(panel.querySelectorAll('[data-heal]'), function (b) {
+      b.addEventListener('click', function () {
+        busy(b, 'Healing');
+        api('/api/v1/environments/' + encodeURIComponent(name) + '/dependencies/' + encodeURIComponent(b.getAttribute('data-heal')) + '/heal', { method: 'POST' })
+          .then(function (r) { location.hash = '#/env/' + name + '/run/' + r.runId; })
+          .catch(function (e) { toast('Heal failed', 'error', e.message); b.disabled = false; b.innerHTML = '<span>Heal</span>'; });
+      });
+    });
+    Array.prototype.forEach.call(panel.querySelectorAll('[data-snap]'), function (b) {
+      b.addEventListener('click', function () {
+        var dep = b.getAttribute('data-snap');
+        var view = envView.data.dependencies.filter(function (x) { return x.name === dep; })[0] || {};
+        modal({
+          width: 460,
+          title: '<h2>Take a new snapshot</h2>',
+          body: '<p class="lead">The current state of <b style="color:var(--gr-text)">' + esc(dep) + '</b> becomes the known-good baseline the reset strategy restores. Postgres is cloned into a template database (open sessions are terminated); a Docker container is stopped briefly, committed, and its mounts archived.</p>' +
+            '<div class="note">' + (view.kind === 'docker' ? 'target: commit + volume archive' : 'target: ' + esc((view.reset && view.reset.template) || (view.snapshot && view.snapshot.template) || 'template database')) +
+            '<div class="muted" style="margin-top:4px">previous: ' + (view.lastSnapshot ? esc(when(view.lastSnapshot.at)) + ' · ' + esc(view.lastSnapshot.ref) : 'none') + '</div></div>',
+          footer: '<button class="btn ghost" data-close><span>Cancel</span></button><button class="btn primary" id="snap-go"><span>Snapshot now</span></button>'
+        }, function (root, close) {
+          root.querySelector('#snap-go').addEventListener('click', function () {
+            busy(root.querySelector('#snap-go'), 'Starting');
+            api('/api/v1/environments/' + encodeURIComponent(name) + '/snapshot', { method: 'POST', body: { dependency: dep } })
+              .then(function (r) { close(); location.hash = '#/env/' + name + '/run/' + r.runId; })
+              .catch(function (e) { toast('Snapshot failed', 'error', e.message); close(); });
+          });
         });
       });
-    }));
-    const stale = document.getElementById('act-stale');
-    if (stale) stale.addEventListener('click', async () => { stale.disabled = true; stale.textContent = 'Running drift queries'; try { await draw(true); } catch (e) { toast(e.message, 'error'); } });
+    });
+    var stale = document.getElementById('act-stale');
+    if (stale) stale.addEventListener('click', function () {
+      busy(stale, 'Running drift queries');
+      envView.draw(false, true).then(function () { renderPanel(true); }).catch(function (e) { toast('Stale check failed', 'error', e.message); });
+    });
   }
 
   function showCheck(name, rep) {
-    const rows = rep.results.map((r) => '<tr><td><b>' + esc(r.dep) + '</b>' + (r.critical ? ' <span class="pill">critical</span>' : '') + '</td><td>' + (!r.ok ? badge('red', 'down') : r.warn ? badge('amber', 'warn') : badge('green', 'up')) + '</td><td class="small">' + esc(r.message) + '</td><td class="num small">' + dur(r.latency) + '</td></tr>').join('');
-    const staleRows = rep.stale && rep.stale.items.length ? '<h3 style="margin-top:12px">Stale</h3>' + rep.stale.items.map((it) => '<div class="stale-item"><span class="sev">' + badge(it.severity === 'stale' ? 'red' : it.severity === 'warn' ? 'amber' : 'blue', it.severity) + '</span><div>' + (it.dep ? '<b>' + esc(it.dep) + '</b> ' : '') + esc(it.message) + '</div></div>').join('') : '<div class="muted small" style="margin-top:10px">Nothing stale.</div>';
-    modal('<h2>' + readinessBadge(rep.readiness, true) + ' Pre-call check</h2><div class="muted">' + esc(rep.summary) + ' <span class="small">(' + dur(rep.duration) + ')</span></div>' +
-      '<div class="table-wrap" style="margin-top:12px;max-height:40vh;overflow:auto"><table><tbody>' + rows + '</tbody></table></div>' + staleRows +
-      '<div class="foot"><a class="btn ghost" href="#/env/' + esc(name) + '/run/' + esc(rep.runId) + '" data-close>Open run</a><button class="btn primary" data-close>Close</button></div>');
+    var rows = rep.results.map(function (r) {
+      return '<tr><td><div class="dim">' + esc(r.dep) + '</div><div class="mono xs muted">' + esc(r.kind) + (r.critical ? ' · critical' : '') + '</div></td><td style="width:80px">' + (!r.ok ? badge('red', 'down', { dot: true }) : r.warn ? badge('amber', 'warn', { dot: true }) : badge('green', 'up', { dot: true })) + '</td><td class="num muted small right" style="width:56px">' + dur(r.latency) + '</td></tr>' +
+        (!r.ok || r.warn ? '<tr><td colspan="3" class="small muted" style="padding-top:0">' + esc(r.message) + '</td></tr>' : '');
+    }).join('');
+    var stale = rep.stale && rep.stale.items.length
+      ? '<h4 style="margin-top:14px">Stale</h4>' + rep.stale.items.map(function (it) { return '<div class="stale-item" style="padding:8px 0;margin:0;border-bottom:1px solid var(--gr-border)">' + badge(it.severity === 'stale' ? 'red' : it.severity === 'warn' ? 'amber' : 'blue', it.severity) + '<div style="min-width:0">' + (it.dep ? '<b>' + esc(it.dep) + '</b> · ' : '') + esc(it.message) + '</div></div>'; }).join('')
+      : '<p style="margin-top:14px;color:var(--gr-green)">Nothing stale.</p>';
+    modal({
+      width: 560,
+      title: readinessBadge(rep.readiness, 'md') + '<div><h2>Pre-call check</h2><p>' + esc(rep.summary) + ' (' + dur(rep.duration) + ')</p></div>',
+      body: '<table class="mini-table"><tbody>' + rows + '</tbody></table>' + stale,
+      footer: '<a class="btn" href="#/env/' + esc(name) + '/run/' + esc(rep.runId) + '" data-close><span>Open run</span></a><button class="btn primary" data-close><span>Close</span></button>'
+    });
   }
 
   function resetDialog(d, name, persona, version) {
-    const personas = {};
-    d.seeds.forEach((s) => { (personas[s.persona] = personas[s.persona] || []).push(s); });
-    const names = Object.keys(personas);
+    var personas = {};
+    d.seeds.forEach(function (s) { (personas[s.persona] = personas[s.persona] || []).push(s); });
+    var names = Object.keys(personas);
     if (!names.length) { toast('This environment has no seed sets', 'error'); return; }
-    let pinnedPersona = persona || (d.pinned ? d.pinned.split('@')[0] : names[0]);
+    var pinnedPersona = persona || (d.pinned ? d.pinned.split('@')[0] : names[0]);
     if (!personas[pinnedPersona]) pinnedPersona = names[0];
-    const options = () => names.map((p) => '<option value="' + esc(p) + '"' + (p === pinnedPersona ? ' selected' : '') + '>' + esc(p) + '</option>').join('');
-    const versions = (p, v) => personas[p].slice().reverse().map((s) => '<option value="' + s.version + '"' + ((v ? s.version === v : s.pinned) ? ' selected' : '') + '>v' + s.version + ' ' + esc(s.title) + (s.pinned ? ' (pinned)' : '') + (s.applied ? ' (applied)' : '') + ((s.problems || []).length ? ' (has problems)' : '') + '</option>').join('');
-    modal('<h2>Reset ' + esc(d.title) + '</h2><p class="muted">Runs the reset strategy of every dependency that has one, applies the seed set, verifies, then records fingerprints. Anything demoed since the last reset is discarded.</p>' +
-      '<div class="row"><label>Persona</label><select id="rs-persona">' + options() + '</select></div>' +
-      '<div class="row"><label>Version</label><select id="rs-version">' + versions(pinnedPersona, version) + '</select></div>' +
-      '<label class="check"><input type="checkbox" id="rs-force"> Continue even if the preflight finds dependencies down</label>' +
-      '<label class="check"><input type="checkbox" id="rs-skip"> Skip reset strategies (apply seed steps only)</label>' +
-      '<div class="foot"><button class="btn" data-close>Cancel</button><button class="btn danger" id="rs-go">Reset now</button></div>', (root, close) => {
-        const ps = root.querySelector('#rs-persona'), vs = root.querySelector('#rs-version');
-        ps.addEventListener('change', () => { vs.innerHTML = versions(ps.value, 0); });
-        root.querySelector('#rs-go').addEventListener('click', async () => {
-          try {
-            const r = await api('/api/v1/environments/' + encodeURIComponent(name) + '/reset', { method: 'POST', body: { persona: ps.value, version: parseInt(vs.value, 10), force: root.querySelector('#rs-force').checked, skipReset: root.querySelector('#rs-skip').checked } });
-            close();
-            location.hash = '#/env/' + name + '/run/' + r.runId;
-          } catch (e) { toast(e.message, 'error'); }
-        });
+    var options = names.map(function (p) { return '<option value="' + esc(p) + '"' + (p === pinnedPersona ? ' selected' : '') + '>' + esc(p) + '</option>'; }).join('');
+    var versions = function (p, v) {
+      return personas[p].slice().reverse().map(function (s) {
+        return '<option value="' + s.version + '"' + ((v ? s.version === v : s.pinned) ? ' selected' : '') + '>v' + s.version + ' · ' + esc(s.title) + (s.pinned ? ' (pinned)' : '') + (s.applied ? ' (applied)' : '') + ((s.problems || []).length ? ' (has problems)' : '') + '</option>';
+      }).join('');
+    };
+    modal({
+      title: '<h2>Reset ' + esc(d.title) + '</h2>',
+      body: '<p class="lead">Greenroom runs the reset strategy of every dependency that has one, applies the selected seed set, verifies it, and records fingerprints. Anything demoed since the last reset is discarded.</p>' +
+        '<div class="fields"><div class="field"><label for="rs-persona">Persona</label><select id="rs-persona">' + options + '</select></div>' +
+        '<div class="field"><label for="rs-version">Version</label><select id="rs-version">' + versions(pinnedPersona, version) + '</select></div></div>' +
+        '<label class="check-row"><input type="checkbox" id="rs-force"> Continue even if the preflight finds dependencies down</label>' +
+        '<label class="check-row"><input type="checkbox" id="rs-skip"> Skip reset strategies (apply seed steps only)</label>',
+      footer: '<button class="btn ghost" data-close><span>Cancel</span></button><button class="btn danger" id="rs-go"><span>Reset now</span></button>'
+    }, function (root, close) {
+      var ps = root.querySelector('#rs-persona'), vs = root.querySelector('#rs-version');
+      ps.addEventListener('change', function () { vs.innerHTML = versions(ps.value, 0); });
+      root.querySelector('#rs-go').addEventListener('click', function () {
+        busy(root.querySelector('#rs-go'), 'Starting');
+        api('/api/v1/environments/' + encodeURIComponent(name) + '/reset', { method: 'POST', body: { persona: ps.value, version: parseInt(vs.value, 10), force: root.querySelector('#rs-force').checked, skipReset: root.querySelector('#rs-skip').checked } })
+          .then(function (r) { close(); toast('Reset started', 'info', 'following the run'); location.hash = '#/env/' + name + '/run/' + r.runId; })
+          .catch(function (e) { toast('Reset refused', 'error', e.message); close(); });
       });
+    });
   }
 
   // ---------- run viewer ----------
-  async function renderRun(name, id) {
-    stopLive();
-    setCrumbs([{ label: 'Environments', href: '#/' }, { label: name, href: '#/env/' + name }, { label: 'Runs', href: '#/env/' + name + '/runs' }, { label: id }]);
-    app.innerHTML = '<div class="empty">Loading run</div>';
-    let run = null;
-    const logEl = () => document.getElementById('log');
-    const draw = () => {
-      const r = run;
-      app.innerHTML = '<div class="run-head"><h1>' + esc(r.kind) + (r.persona ? ' ' + esc(r.persona) + '@v' + r.version : '') + '</h1>' + statusBadge(r.status) +
-        '<span class="muted">' + esc(when(r.startedAt)) + (r.actor ? ' by ' + esc(r.actor) : '') + (r.status !== 'running' ? ', took ' + dur(r.duration) : '') + '</span><span class="spacer"></span><span class="muted mono small">' + esc(r.id) + '</span></div>' +
-        (r.summary ? '<div class="card" style="margin-bottom:12px"><b>' + esc(r.summary) + '</b></div>' : '') +
-        (r.error && !r.summary ? '<div class="error-box">' + esc(r.error) + '</div>' : '') +
-        '<div class="two"><div><h2 style="margin-bottom:8px">Steps</h2><div class="steps" id="steps">' + r.steps.map(stepHtml).join('') + (r.steps.length ? '' : '<div class="muted small">no steps yet</div>') + '</div></div>' +
-        '<div><h2 style="margin-bottom:8px">Log <span class="muted small">' + r.log.length + ' lines</span></h2><div class="log" id="log">' + r.log.map(lineHtml).join('') + '</div></div></div>';
-      const l = logEl(); if (l) l.scrollTop = l.scrollHeight;
-    };
-    const es = new EventSource('/api/v1/environments/' + encodeURIComponent(name) + '/runs/' + encodeURIComponent(id) + '/events');
-    source = es;
-    es.addEventListener('snapshot', (e) => { run = JSON.parse(e.data); draw(); });
-    es.addEventListener('log', (e) => {
-      const ev = JSON.parse(e.data); if (!run) return;
-      run.log.push(ev.line);
-      const l = logEl(); if (l) { l.insertAdjacentHTML('beforeend', lineHtml(ev.line)); l.scrollTop = l.scrollHeight; }
-    });
-    es.addEventListener('step', (e) => {
-      const ev = JSON.parse(e.data); if (!run) return;
-      const i = run.steps.findIndex((s) => s.name === ev.step.name && s.kind === ev.step.kind);
-      if (i >= 0) run.steps[i] = ev.step; else run.steps.push(ev.step);
-      const el = document.getElementById('steps'); if (el) el.innerHTML = run.steps.map(stepHtml).join('');
-    });
-    es.addEventListener('done', async (e) => {
-      es.close(); source = null;
-      try { run = await api('/api/v1/environments/' + encodeURIComponent(name) + '/runs/' + encodeURIComponent(id)); draw(); } catch (err) { /* keep what we have */ }
-    });
-    es.onerror = () => { if (run && run.status !== 'running') { es.close(); source = null; } };
+  function stepIcon(status) {
+    if (status === 'running') return '<svg class="ico ring" viewBox="0 0 16 16" aria-label="running"><circle cx="8" cy="8" r="6.4" fill="none" stroke="var(--gr-blue)" stroke-width="2" opacity="0.25"/><path d="M8 1.6a6.4 6.4 0 0 1 6.4 6.4" fill="none" stroke="var(--gr-blue)" stroke-width="2" stroke-linecap="round"/></svg>';
+    if (status === 'ok') return '<svg class="ico" viewBox="0 0 16 16" aria-label="ok"><circle cx="8" cy="8" r="6.6" fill="none" stroke="var(--gr-green-line)" stroke-width="1.5"/><path class="check" d="M4.8 8.3 7 10.5l4.2-4.6" fill="none" stroke="var(--gr-green)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    if (status === 'failed') return '<svg class="ico" viewBox="0 0 16 16" aria-label="failed"><circle cx="8" cy="8" r="6.6" fill="none" stroke="var(--gr-red-line)" stroke-width="1.5"/><path d="m5.6 5.6 4.8 4.8M10.4 5.6l-4.8 4.8" stroke="var(--gr-red)" stroke-width="1.8" stroke-linecap="round"/></svg>';
+    return '<svg class="ico" viewBox="0 0 16 16" aria-label="skipped"><circle cx="8" cy="8" r="6.6" fill="none" stroke="var(--gr-border-strong)" stroke-width="1.5" stroke-dasharray="2.5 2.5"/></svg>';
   }
-  function stepHtml(s) {
-    return '<div class="step ' + esc(s.status) + '"><span class="ico"></span><div><b>' + esc(s.name) + '</b> <span class="muted small">' + esc(s.kind) + '</span>' + (s.error ? '<div class="err">' + esc(s.error) + '</div>' : '') + (s.detail ? '<div class="detail">' + esc(s.detail) + '</div>' : '') + '</div><span class="muted small">' + (s.status === 'running' ? '' : dur(s.duration)) + '</span></div>';
+  function stepHtml(s, i) {
+    return '<div class="card step ' + esc(s.status) + '" style="--i:' + i + '">' + stepIcon(s.status) + '<div class="body"><div class="name">' + esc(s.name) + '</div><div class="kind">' + esc(s.kind) + '</div>' +
+      (s.error ? '<div class="err">' + esc(s.error) + '</div>' : '') + (s.detail ? '<div class="detail mono small">' + esc(s.detail) + '</div>' : '') + '</div>' +
+      '<span class="dur">' + (s.status === 'running' ? '' : dur(s.duration)) + '</span></div>';
   }
   function lineHtml(l) {
-    const t = new Date(l.at);
-    const ts = isNaN(t.getTime()) ? '' : t.toTimeString().slice(0, 8);
-    return '<div class="l"><span class="t">' + ts + '</span><span class="' + esc(l.level) + '">' + (l.step ? '<span class="step-tag">[' + esc(l.step) + ']</span>' : '') + esc(l.text) + '</span></div>';
+    var t = new Date(l.at);
+    var ts = isNaN(t.getTime()) ? '' : t.toTimeString().slice(0, 8);
+    return '<div class="l"><span class="t">' + ts + '</span>' + (l.step ? '<span class="tag">[' + esc(l.step) + ']</span>' : '') + '<span class="' + esc(l.level) + '">' + esc(l.text) + '</span></div>';
+  }
+  function renderRun(name, id) {
+    stopLive();
+    envView = null;
+    setCrumbs([{ label: 'Environments', href: '#/' }, { label: name, href: '#/env/' + name }, { label: 'Runs', href: '#/env/' + name + '/runs' }, { label: id }]);
+    app.innerHTML = '<div class="spotlight"></div><div class="page"><div class="skel" style="width:260px;height:22px"></div><div class="skel" style="width:420px;height:12px;margin-top:10px"></div></div>';
+    var run = null;
+    var logEl = function () { return document.getElementById('log'); };
+    var draw = function (animate) {
+      var r = run, live = r.status === 'running';
+      app.innerHTML = '<div class="spotlight"></div><div class="page' + (animate ? '' : ' static') + '"><header class="run-head rise"><div style="min-width:0"><h1>' + esc(r.kind) + (r.persona ? ' <span class="mono">' + esc(r.persona) + '@v' + r.version + '</span>' : '') + statusBadge(r.status) + '</h1>' +
+        '<p class="small muted num" style="margin-top:4px">' + esc(when(r.startedAt)) + (r.actor ? ' by <span class="mono">' + esc(r.actor) + '</span>' : '') + (live ? ', running' : ', took ' + dur(r.duration)) + '</p></div>' +
+        '<div class="right"><div class="xs muted" style="text-transform:uppercase;letter-spacing:.06em">Run</div><div class="mono small dim">' + esc(r.id) + '</div></div></header>' +
+        '<div class="card run-summary rise" style="animation-delay:60ms">' + statusBadge(r.status) + '<span>' + esc(r.summary || r.error || (live ? 'in progress' : '')) + '</span>' + (r.persona ? chip('green', r.persona + '@v' + r.version) : '') + '</div>' +
+        '<div class="run-grid"><section><h2>Steps <span class="muted num" id="step-count">' + r.steps.length + '</span></h2><div class="steps stagger" id="steps">' + r.steps.map(stepHtml).join('') + (r.steps.length ? '' : '<div class="small muted">no steps yet</div>') + '</div></section>' +
+        '<section style="min-width:0"><h2>Log <span class="muted small">' + r.log.length + ' lines</span></h2><div class="log" id="log" role="log" aria-live="polite">' + r.log.map(lineHtml).join('') + (live ? '<div class="stream" id="stream"><i></i>streaming</div>' : '') + '</div></section></div></div>';
+      var l = logEl(); if (l) l.scrollTop = l.scrollHeight;
+    };
+    var es = new EventSource('/api/v1/environments/' + encodeURIComponent(name) + '/runs/' + encodeURIComponent(id) + '/events');
+    source = es;
+    es.addEventListener('snapshot', function (e) { run = JSON.parse(e.data); draw(true); });
+    es.addEventListener('log', function (e) {
+      var ev = JSON.parse(e.data); if (!run) return;
+      run.log.push(ev.line);
+      var l = logEl(); if (l) { var s = document.getElementById('stream'); if (s) s.insertAdjacentHTML('beforebegin', lineHtml(ev.line)); else l.insertAdjacentHTML('beforeend', lineHtml(ev.line)); l.scrollTop = l.scrollHeight; }
+    });
+    es.addEventListener('step', function (e) {
+      var ev = JSON.parse(e.data); if (!run) return;
+      var i = -1;
+      run.steps.forEach(function (s, k) { if (s.name === ev.step.name && s.kind === ev.step.kind) i = k; });
+      var isNew = i < 0;
+      if (isNew) { run.steps.push(ev.step); i = run.steps.length - 1; } else { run.steps[i] = ev.step; }
+      var el = document.getElementById('steps');
+      if (!el) return;
+      el.classList.remove('stagger');
+      // Replace only the step that changed so finished checkmarks are not redrawn.
+      var tmp = document.createElement('div');
+      tmp.innerHTML = stepHtml(ev.step, 0);
+      var node = tmp.firstChild;
+      if (isNew) {
+        var placeholder = el.querySelector('.small.muted');
+        if (placeholder) placeholder.remove();
+        el.appendChild(node);
+      } else if (el.children[i]) {
+        el.replaceChild(node, el.children[i]);
+      }
+      var count = document.getElementById('step-count');
+      if (count) count.textContent = run.steps.length;
+    });
+    es.addEventListener('done', function () {
+      es.close(); source = null;
+      api('/api/v1/environments/' + encodeURIComponent(name) + '/runs/' + encodeURIComponent(id)).then(function (r) { run = r; draw(false); var st = document.getElementById('stream'); if (st) st.remove(); }).catch(function () { if (run) { run.status = run.status === 'running' ? 'ok' : run.status; draw(false); } });
+    });
+    es.onerror = function () { if (run && run.status !== 'running') { es.close(); source = null; } };
   }
 
   // ---------- router ----------
   function route() {
-    const h = location.hash.replace(/^#\/?/, '');
-    const parts = h.split('/').filter(Boolean).map(decodeURIComponent);
-    const go = (p) => p.catch((e) => { app.innerHTML = '<div class="error-box">' + esc(e.message) + '</div>'; });
+    var h = location.hash.replace(/^#\/?/, '');
+    var parts = h.split('/').filter(Boolean).map(decodeURIComponent);
+    var go = function (fn) { try { fn(); } catch (e) { app.innerHTML = '<div class="alert">' + I.alert + '<div><b>Error</b>' + esc(e.message) + '</div></div>'; } };
     if (parts[0] === 'env' && parts[1]) {
-      if (parts[2] === 'run' && parts[3]) return go(renderRun(parts[1], parts[3]));
-      return go(renderEnv(parts[1], parts[2]));
+      if (parts[2] === 'run' && parts[3]) return go(function () { renderRun(parts[1], parts[3]); });
+      return go(function () { renderEnv(parts[1], parts[2]); });
     }
-    return go(renderOverview());
+    return go(renderOverview);
   }
   window.addEventListener('hashchange', route);
-  document.getElementById('btn-reload').addEventListener('click', async () => {
-    try { const r = await api('/api/v1/reload', { method: 'POST' }); toast(r.ok ? 'Configuration reloaded: ' + r.environments + ' environments' : 'Reload finished with errors: ' + r.error, r.ok ? 'ok' : 'error'); route(); } catch (e) { toast(e.message, 'error'); }
+  window.addEventListener('resize', function () { positionIndicator(false); });
+  document.getElementById('btn-reload').addEventListener('click', function () {
+    var b = document.getElementById('btn-reload');
+    busy(b, 'Reloading');
+    api('/api/v1/reload', { method: 'POST' }).then(function (r) {
+      toast(r.ok ? 'Configuration reloaded' : 'Reload finished with errors', r.ok ? 'ok' : 'error', r.ok ? r.environments + ' environment' + (r.environments === 1 ? '' : 's') : r.error);
+      envView = null; route();
+    }).catch(function (e) { toast('Reload failed', 'error', e.message); })
+      .then(function () { b.disabled = false; b.innerHTML = I.refresh + '<span>Reload config</span>'; });
   });
-  setInterval(() => { document.getElementById('clock').textContent = new Date().toLocaleTimeString(); }, 1000);
-  api('/api/v1/me').then((m) => { me = m; if (m.auth) document.getElementById('logout-form').hidden = false; }).catch(() => {});
+  document.getElementById('btn-theme').addEventListener('click', function () {
+    theme = theme === 'dark' ? 'light' : 'dark';
+    try { localStorage.setItem('gr-theme', theme); } catch (e) { /* ignore */ }
+    applyTheme();
+  });
+  setInterval(function () { document.getElementById('clock').textContent = new Date().toLocaleTimeString('en-US', { hour12: false }); }, 1000);
+  api('/api/v1/me').then(function (m) { me = m; if (m.auth) document.getElementById('logout-form').hidden = false; }).catch(function () {});
   route();
 })();
