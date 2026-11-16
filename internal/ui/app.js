@@ -570,6 +570,11 @@
     var name = b.prospect || (k ? k.name : '');
     return '<span class="prospect-cell">' + (k ? kitLogo(k, 22) : '') + '<span class="ellipsis">' + (name ? esc(name) : '<span class="muted">none</span>') + '</span></span>';
   }
+  function prospectText(d, kits) {
+    var k = d.brand && kits[d.brand];
+    if (!d.prospect || (k && String(k.name).trim().toLowerCase() === String(d.prospect).trim().toLowerCase())) return '';
+    return '<span class="dim">' + esc(d.prospect) + '</span>';
+  }
   function brandChip(d, kits) {
     var k = d.brand && kits[d.brand];
     if (k) return '<span class="brand-chip">' + kitLogo(k, 18) + '<span>' + esc(k.name) + '</span></span>';
@@ -649,7 +654,7 @@
     return '<div class="titles"><h1><span>' + esc(d.title) + '</span>' + demoBadge(d.status) + (d.booked ? '' : chip('grey', 'logged')) + '</h1>' +
       '<p>' + esc(slotText(d)) + ' <span class="muted">(' + esc(countdown(d)) + ')</span>' + (prepAt ? '<span class="muted">, prep at ' + esc(hm(prepAt.toISOString())) + '</span>' : '') + '</p>' +
       '<div class="tpl-line"><a class="mono" href="#/env/' + esc(d.env) + '">' + esc(d.env) + '</a>' + setChip(d) + brandChip(d, kits) +
-      (d.prospect ? '<span class="dim">' + esc(d.prospect) + '</span>' : '') + (d.readiness ? readinessBadge(d.readiness) : '') + (d.outcome ? outcomeChip(d.outcome) : '') + '</div>' +
+      prospectText(d, kits) + (d.readiness ? readinessBadge(d.readiness) : '') + (d.outcome ? outcomeChip(d.outcome) : '') + '</div>' +
       (runs.length ? '<div class="run-links small">' + runs.map(function (r) { return '<a href="#/env/' + esc(d.env) + '/run/' + esc(d[r[0]]) + '">' + esc(r[1]) + '</a>'; }).join('') + '</div>' : '') + '</div>' +
       '<div class="actions">' + (d.status === 'done' && !d.debrief ? '<a class="btn primary" href="#/demos/' + esc(d.id) + '/debrief"><span>Debrief</span></a>' : '') +
       (d.booked && d.status === 'scheduled' ? '<button class="btn" id="act-prepare"><span>Prepare now</span></button>' : '') +
@@ -1305,7 +1310,7 @@
     setCrumbs([{ label: 'Demos', href: '#/demos' }, { label: d.title, href: '#/demos/' + d.id }, { label: 'Debrief' }]);
     var head = '<header class="demo-head rise"><div class="titles"><h1><span>' + esc((db ? 'Edit debrief: ' : 'Debrief: ') + d.title) + '</span>' + demoBadge(d.status) + '</h1>' +
       '<p>' + esc(slotText(d)) + '</p><div class="tpl-line"><a class="mono" href="#/env/' + esc(d.env) + '">' + esc(d.env) + '</a>' + setChip(d) + brandChip(d, kits) +
-      (d.prospect ? '<span class="dim">' + esc(d.prospect) + '</span>' : '') + '</div></div>' +
+      prospectText(d, kits) + '</div></div>' +
       '<div class="actions"><a class="btn ghost" href="#/demos/' + esc(d.id) + '"><span>Back to the demo</span></a></div></header>';
     if (d.status !== 'done') {
       app.innerHTML = '<div class="spotlight"></div><div class="page">' + head + '<div class="alert info rise">' + I.info + '<div><b>Not done yet</b><span class="small">' +

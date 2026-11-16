@@ -500,6 +500,7 @@ details.params summary { cursor: pointer; font-size: 13px; color: var(--gr-text-
 .seg-btn:hover { color: var(--gr-text); }
 .seg-btn.active { background: var(--gr-panel); color: var(--gr-text); box-shadow: var(--gr-shadow-card), var(--gr-card-highlight); }
 .demo-table td { vertical-align: middle; }
+.demo-table td .mono, .demo-table td .chip { white-space: nowrap; word-break: normal; }
 .demo-title { color: var(--gr-text); font-weight: 500; }
 .prospect-cell { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 220px; }
 .prospect-cell .kit-logo, .brand-chip .kit-logo { border-radius: var(--gr-radius-sm); }
