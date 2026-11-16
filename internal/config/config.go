@@ -60,6 +60,7 @@ type Workspace struct {
 	Listen          string   `json:"listen,omitempty"`
 	StateDir        string   `json:"stateDir,omitempty"`
 	EnvironmentsDir string   `json:"environmentsDir,omitempty"`
+	TemplatesDir    string   `json:"templatesDir,omitempty"`
 	ProbeInterval   Duration `json:"probeInterval,omitempty"`
 	SampleRetention Duration `json:"sampleRetention,omitempty"`
 	HealCooldown    Duration `json:"healCooldown,omitempty"`
@@ -67,6 +68,9 @@ type Workspace struct {
 	Token string `json:"token,omitempty"`
 	// PublicURL is used in links and in the login page, optional.
 	PublicURL string `json:"publicUrl,omitempty"`
+	// LinkFetch tunes the client that fetches brand kits and assets from
+	// links people paste.
+	LinkFetch LinkFetch `json:"linkFetch,omitempty"`
 
 	// BaseDir is the directory the workspace file lives in (not serialised).
 	BaseDir string `json:"-"`
@@ -74,10 +78,39 @@ type Workspace struct {
 	Path string `json:"-"`
 }
 
+// LinkFetch configures fetching from links. By default only public
+// addresses on ports 80 and 443 can be reached.
+type LinkFetch struct {
+	// AllowPrivate permits loopback, private and link-local addresses and
+	// any port, for brand sites hosted inside the network.
+	AllowPrivate bool     `json:"allowPrivate,omitempty"`
+	Timeout      Duration `json:"timeout,omitempty"`
+}
+
+// BrandDefaults is the house brand a reset uses when no prospect brand kit
+// is chosen.
+type BrandDefaults struct {
+	Name    string `json:"name,omitempty"`
+	Tagline string `json:"tagline,omitempty"`
+	Domain  string `json:"domain,omitempty"`
+	Primary string `json:"primary,omitempty"`
+	Accent  string `json:"accent,omitempty"`
+}
+
 // Pin names the persona and seed version an environment is expected to run.
 type Pin struct {
 	Persona string `json:"persona"`
 	Version int    `json:"version,omitempty"`
+}
+
+// TemplateRef records the template an environment was created from and the
+// product modules it was built with. It is informational: the environment
+// file is the source of truth once written.
+type TemplateRef struct {
+	Name        string   `json:"name"`
+	Version     int      `json:"version,omitempty"`
+	ProductType string   `json:"productType,omitempty"`
+	Modules     []string `json:"modules,omitempty"`
 }
 
 // Environment is one environments/<name>/environment.json file.
@@ -92,6 +125,10 @@ type Environment struct {
 	Dependencies []Dependency      `json:"dependencies"`
 	// Env holds extra environment variables made available to steps and DSNs.
 	Env map[string]string `json:"env,omitempty"`
+	// Template is set when the environment was created with greenroom new.
+	Template *TemplateRef `json:"template,omitempty"`
+	// Brand holds the house brand used when a reset has no brand kit.
+	Brand *BrandDefaults `json:"brand,omitempty"`
 
 	Dir  string `json:"-"`
 	Path string `json:"-"`
@@ -207,6 +244,23 @@ type DriftCheck struct {
 	Min       *float64 `json:"min,omitempty"`
 	Max       *float64 `json:"max,omitempty"`
 	Tolerance float64  `json:"tolerance,omitempty"`
+	// Personas limits the check to seed sets of these personas, for data
+	// that only some seed sets create. Empty means every seed set.
+	Personas []string `json:"personas,omitempty"`
+}
+
+// Applies reports whether the check is evaluated when persona's seed set is
+// the one applied. An empty persona (never reset) only runs unscoped checks.
+func (dc DriftCheck) Applies(persona string) bool {
+	if len(dc.Personas) == 0 {
+		return true
+	}
+	for _, p := range dc.Personas {
+		if p == persona {
+			return true
+		}
+	}
+	return false
 }
 
 // Dependency is one thing a demo needs to be up and correct.
@@ -334,11 +388,17 @@ func (ws *Workspace) applyDefaults() {
 	if ws.EnvironmentsDir == "" {
 		ws.EnvironmentsDir = "environments"
 	}
+	if ws.TemplatesDir == "" {
+		ws.TemplatesDir = "templates"
+	}
 	if !filepath.IsAbs(ws.StateDir) {
 		ws.StateDir = filepath.Join(ws.BaseDir, ws.StateDir)
 	}
 	if !filepath.IsAbs(ws.EnvironmentsDir) {
 		ws.EnvironmentsDir = filepath.Join(ws.BaseDir, ws.EnvironmentsDir)
+	}
+	if !filepath.IsAbs(ws.TemplatesDir) {
+		ws.TemplatesDir = filepath.Join(ws.BaseDir, ws.TemplatesDir)
 	}
 	if ws.ProbeInterval == 0 {
 		ws.ProbeInterval = Duration(DefaultProbeInterval)
@@ -415,6 +475,8 @@ func LoadEnvironments(dir string) ([]*Environment, error) {
 }
 
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
+
+var colorRe = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 
 // ValidName reports whether s is safe to use as an environment, dependency,
 // persona or target name (it appears in paths and URLs).
@@ -534,6 +596,18 @@ func (e *Environment) Validate() error {
 			if dc.Name == "" {
 				fail("%s: drift[%d] needs a name", where, j)
 			}
+			for _, p := range dc.Personas {
+				if !ValidName(p) {
+					fail("%s: drift[%d]: persona %q is not a valid name", where, j, p)
+				}
+			}
+		}
+	}
+	if e.Brand != nil {
+		for _, c := range []string{e.Brand.Primary, e.Brand.Accent} {
+			if c != "" && !colorRe.MatchString(c) {
+				fail("brand: color %q must be #rrggbb", c)
+			}
 		}
 	}
 	if e.Pin.Persona != "" && !ValidName(e.Pin.Persona) {
@@ -591,6 +665,17 @@ func (e *Environment) expand() {
 // Expand replaces ${VAR} and ${VAR:-default} using lookup. A missing variable
 // with no default expands to the empty string. $$ yields a literal $.
 func Expand(s string, lookup func(string) string) string {
+	return expandVars(s, func(k string) (string, bool) { return lookup(k), true })
+}
+
+// ExpandKnown is Expand for text that may hold the variables of another
+// program, such as a sh -c script: ${VAR} is replaced only when lookup
+// knows VAR or a default is given; anything else stays as written.
+func ExpandKnown(s string, lookup func(string) (string, bool)) string {
+	return expandVars(s, lookup)
+}
+
+func expandVars(s string, lookup func(string) (string, bool)) string {
 	if !strings.Contains(s, "$") {
 		return s
 	}
@@ -614,7 +699,12 @@ func Expand(s string, lookup func(string) string) string {
 			}
 			body := s[i+2 : i+end]
 			name, def, hasDef := strings.Cut(body, ":-")
-			v := lookup(name)
+			v, known := lookup(name)
+			if !known && !hasDef {
+				out.WriteString(s[i : i+end+1])
+				i += end
+				continue
+			}
 			if v == "" && hasDef {
 				v = def
 			}
@@ -669,19 +759,36 @@ func stripComments(b []byte) []byte {
 // StripComments is exported for the seeds package.
 func StripComments(b []byte) []byte { return stripComments(b) }
 
-// WriteJSON writes v to path atomically with a trailing newline.
+// WriteJSON writes v to path atomically with a trailing newline. The temp
+// file has a unique name in the same directory, so two writers of the same
+// path never share one, and it is removed when anything fails.
 func WriteJSON(path string, v any) error {
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
 	b = append(b, '\n')
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+	f, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	tmp := f.Name()
+	_, err = f.Write(b)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Chmod(tmp, 0o644)
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		os.Remove(tmp)
+	}
+	return err
 }

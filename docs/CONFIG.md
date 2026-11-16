@@ -13,11 +13,13 @@ Sits at the workspace root. Every field is optional.
 | --- | --- | --- |
 | `listen` | `127.0.0.1:8470` | Portal address. `GREENROOM_LISTEN` overrides. |
 | `environmentsDir` | `environments` | Directory holding one sub-directory per environment. |
+| `templatesDir` | `templates` | Workspace templates; see [TEMPLATES.md](TEMPLATES.md). |
 | `stateDir` | `state` | Where applied records, samples, runs and snapshots are written. |
 | `probeInterval` | `60s` | How often the portal's scheduler probes every dependency. |
 | `sampleRetention` | `720h` | How long uptime samples are kept. |
 | `healCooldown` | `5m` | Minimum gap between heals of the same dependency, manual or automatic. |
 | `token` | none | Portal and API token. `GREENROOM_TOKEN` overrides. Without a token the portal only binds to loopback. |
+| `linkFetch` | public only | `{ "allowPrivate": false, "timeout": "15s" }`. The client that fetches brand kits from pasted links. `allowPrivate` lets it reach loopback, private and link-local addresses on any port; see [PERSONALIZE.md](PERSONALIZE.md). |
 
 ## Environment: `environments/<name>/environment.json`
 
@@ -30,6 +32,8 @@ Sits at the workspace root. Every field is optional.
 | `env` | Extra variables available to `${VAR}` expansion and exported to shell steps. |
 | `targets` | Named platform connections, see below. |
 | `dependencies` | Ordered list of things the demo needs, see below. |
+| `brand` | House brand for resets without a brand kit: `{ "name", "tagline", "domain", "primary", "accent" }`, colors as `#rrggbb`. See [PERSONALIZE.md](PERSONALIZE.md). |
+| `template` | Written by `greenroom new`: the template, its version, product type and the modules the environment was built with. Informational. |
 
 ### Targets
 
@@ -169,6 +173,10 @@ demo that changes the number shows up as stale. `query` needs a postgres or
 mysql dependency; `command` runs through the dependency's target and reads
 the first line of output.
 
+`personas` limits a check to the seed sets of those personas, for data that
+only some seed sets create. Templates set it on module checks when a
+persona leaves the module out. A check without it runs for every seed set.
+
 ## Environment variables
 
 | Variable | Effect |
@@ -176,6 +184,7 @@ the first line of output.
 | `GREENROOM_TOKEN` | Portal and API token. |
 | `GREENROOM_LISTEN` | Portal address. |
 | `GREENROOM_INSECURE=1` | Allow a non-loopback listen address without a token. |
+| `GREENROOM_USER` | Owner of demos booked or logged with the CLI (falls back to `USER`, then `USERNAME`). |
 | `DOCKER_HOST` | Default docker endpoint. |
 | `AWS_REGION`, `AWS_PROFILE`, `AWS_*` | Standard AWS settings. |
 | `KUBERNETES_SERVICE_HOST` | Present in a pod; enables in-cluster auth by default. |

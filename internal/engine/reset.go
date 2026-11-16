@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dboudreau00/greenroom/internal/brand"
 	"github.com/dboudreau00/greenroom/internal/config"
 	"github.com/dboudreau00/greenroom/internal/probe"
 	"github.com/dboudreau00/greenroom/internal/seeds"
@@ -29,7 +30,13 @@ type ResetOptions struct {
 	Force bool
 	// SkipReset applies the seed steps without running reset strategies.
 	SkipReset bool
-	Actor     string
+	// Brand is the brand kit to personalize the demo for; empty uses the
+	// environment's house brand.
+	Brand string
+	// Override resets even while a booked demo is on stage; the demo's
+	// journal records it.
+	Override bool
+	Actor    string
 }
 
 // StartReset launches a reset in the background and returns its run id.
@@ -45,16 +52,25 @@ func (e *Engine) StartReset(envName string, opts ResetOptions) (string, error) {
 	if len(set.Problems) > 0 {
 		return "", fmt.Errorf("seed set %s cannot be applied: %s", set.ID(), strings.Join(set.Problems, "; "))
 	}
+	kit, err := e.loadKit(opts.Brand)
+	if err != nil {
+		return "", err
+	}
+	live, err := e.guardLive(v.Config.Name, opts.Override)
+	if err != nil {
+		return "", err
+	}
 	rec := e.newRun(v.Config.Name, state.RunReset, opts.Actor)
 	if err := e.acquire(v, rec.ID()); err != nil {
 		rec.discard()
 		return "", err
 	}
+	e.noteOverride(live, opts.Actor, "reset", rec.ID())
 	go func() {
 		defer e.release(v)
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 		defer cancel()
-		e.runReset(ctx, v, set, opts, rec)
+		e.runReset(ctx, v, set, kit, opts, rec)
 	}()
 	return rec.ID(), nil
 }
@@ -72,24 +88,42 @@ func (e *Engine) Reset(ctx context.Context, envName string, opts ResetOptions) (
 	if len(set.Problems) > 0 {
 		return nil, fmt.Errorf("seed set %s cannot be applied: %s", set.ID(), strings.Join(set.Problems, "; "))
 	}
+	kit, err := e.loadKit(opts.Brand)
+	if err != nil {
+		return nil, err
+	}
+	live, err := e.guardLive(v.Config.Name, opts.Override)
+	if err != nil {
+		return nil, err
+	}
 	rec := e.newRun(v.Config.Name, state.RunReset, opts.Actor)
 	if err := e.acquire(v, rec.ID()); err != nil {
 		return rec.Finish(err, ""), err
 	}
 	defer e.release(v)
-	run := e.runReset(ctx, v, set, opts, rec)
+	e.noteOverride(live, opts.Actor, "reset", rec.ID())
+	run := e.runReset(ctx, v, set, kit, opts, rec)
 	if run.Status != state.StatusOK {
 		return run, errors.New(run.Error)
 	}
 	return run, nil
 }
 
-func (e *Engine) runReset(ctx context.Context, v *Env, set *seeds.Set, opts ResetOptions, rec *recorder) *state.Run {
+func (e *Engine) runReset(ctx context.Context, v *Env, set *seeds.Set, kit *brand.Kit, opts ResetOptions, rec *recorder) *state.Run {
 	rec.mu.Lock()
 	rec.run.Persona, rec.run.Version, rec.run.SetHash = set.Persona, set.Version, set.Hash
+	if kit != nil {
+		rec.run.Brand = kit.Slug
+	}
 	rec.mu.Unlock()
 	rec.Info("", "reset %s to %s (%s)", v.Config.DisplayTitle(), set.ID(), set.DisplayTitle())
 	rec.Info("", "seed set hash %s, %d files, %d steps", set.Hash[:12], len(set.Files), len(set.Steps))
+	vals := e.brandValues(v, kit)
+	if kit != nil {
+		rec.Info("", "personalized for %s (%s, kit %s)", kit.Name, firstNonEmpty(kit.Domain, kit.Slug), kit.Hash())
+	} else {
+		rec.Info("", "house brand %s", vals["name"])
+	}
 	start := e.Now()
 
 	// 1. Preflight.
@@ -154,7 +188,7 @@ func (e *Engine) runReset(ctx context.Context, v *Env, set *seeds.Set, opts Rese
 	// 3. Steps.
 	for _, st := range set.Steps {
 		idx := rec.StartStep(st.Name, st.Kind)
-		detail, err := e.runStep(ctx, v, set, st, rec)
+		detail, err := e.runStep(ctx, v, set, st, kit, vals, rec)
 		if err != nil && st.ContinueOnError {
 			rec.Warn(st.Name, "step failed but continueOnError is set: %v", err)
 			rec.EndStep(idx, nil, "failed, continued: "+err.Error())
@@ -186,6 +220,9 @@ func (e *Engine) runReset(ctx context.Context, v *Env, set *seeds.Set, opts Rese
 	var samples []state.Sample
 	applied := &state.Applied{Persona: set.Persona, Version: set.Version, SetID: set.ID(), SetHash: set.Hash, Files: set.Files,
 		At: e.Now(), RunID: rec.ID(), Actor: opts.Actor, Fingerprints: map[string]state.Fingerprint{}, Baselines: map[string]map[string]float64{}}
+	if kit != nil {
+		applied.Brand = &state.AppliedBrand{Slug: kit.Slug, Name: kit.Name, Hash: kit.Hash()}
+	}
 	var stillDown []string
 	for _, r := range after {
 		samples = append(samples, r.Sample())
@@ -198,6 +235,7 @@ func (e *Engine) runReset(ctx context.Context, v *Env, set *seeds.Set, opts Rese
 	}
 	e.store.AppendSamples(v.Config.Name, samples)
 	for _, dep := range v.Config.Dependencies {
+		dep = driftFor(dep, set.Persona)
 		if len(dep.Drift) == 0 {
 			continue
 		}
@@ -471,8 +509,9 @@ func (e *Engine) resetEC2(ctx context.Context, v *Env, dep config.Dependency, re
 	return "", fmt.Errorf("ec2 reset strategy %q is not one of reboot, script", dep.Reset.Strategy)
 }
 
-// runStep executes one seed step.
-func (e *Engine) runStep(ctx context.Context, v *Env, set *seeds.Set, st seeds.Step, rec *recorder) (string, error) {
+// runStep executes one seed step. Brand values are filled in after ${VAR}
+// expansion, so a value from a fetched kit is never expanded itself.
+func (e *Engine) runStep(ctx context.Context, v *Env, set *seeds.Set, st seeds.Step, kit *brand.Kit, vals brand.Values, rec *recorder) (string, error) {
 	expand := func(s string) string {
 		return config.Expand(s, func(k string) string {
 			if val, ok := st.Env[k]; ok {
@@ -486,6 +525,9 @@ func (e *Engine) runStep(ctx context.Context, v *Env, set *seeds.Set, st seeds.S
 	}
 	env := map[string]string{}
 	for k, val := range v.Config.Env {
+		env[k] = val
+	}
+	for k, val := range vals.Env() {
 		env[k] = val
 	}
 	for k, val := range st.Env {
@@ -511,6 +553,10 @@ func (e *Engine) runStep(ctx context.Context, v *Env, set *seeds.Set, st seeds.S
 			}
 			script = string(b)
 		}
+		script, err = personalize(st, vals, script, brand.SQL)
+		if err != nil {
+			return "", err
+		}
 		rec.Info(st.Name, "applying %s to %s (%d bytes)", firstNonEmpty(st.File, "inline sql"), dep.Name, len(script))
 		cctx, cancel := withTimeout(ctx, timeout, 30*time.Minute)
 		defer cancel()
@@ -527,15 +573,23 @@ func (e *Engine) runStep(ctx context.Context, v *Env, set *seeds.Set, st seeds.S
 		if st.Kind == seeds.StepCommand {
 			spec.Argv = make([]string, len(st.Command))
 			for i, a := range st.Command {
-				spec.Argv[i] = expand(a)
+				arg, err := personalize(st, vals, expand(a), brand.Raw)
+				if err != nil {
+					return "", err
+				}
+				spec.Argv[i] = arg
 			}
 			if st.File != "" {
 				b, err := set.ReadFile(st.File)
 				if err != nil {
 					return "", err
 				}
-				spec.Stdin = bytes.NewReader(b)
-				spec.StdinLen = int64(len(b))
+				in, err := personalizeFile(st, vals, string(b), st.File)
+				if err != nil {
+					return "", err
+				}
+				spec.Stdin = strings.NewReader(in)
+				spec.StdinLen = int64(len(in))
 			}
 			rec.Info(st.Name, "running %s on %s", targets.ShellJoin(spec.Argv), firstNonEmpty(st.Target, "local"))
 		} else {
@@ -555,7 +609,9 @@ func (e *Engine) runStep(ctx context.Context, v *Env, set *seeds.Set, st seeds.S
 		}
 		return fmt.Sprintf("exit %d in %s", res.ExitCode, res.Duration.Round(time.Millisecond)), res.Error()
 	case seeds.StepHTTP:
-		return e.httpStep(ctx, set, st, expand, rec)
+		return e.httpStep(ctx, set, st, expand, vals, rec)
+	case seeds.StepAsset:
+		return e.assetStep(ctx, v, set, st, kit, expand, rec)
 	case seeds.StepCopy:
 		cp, err := v.Registry.Copier(st.Target)
 		if err != nil {
@@ -565,7 +621,17 @@ func (e *Engine) runStep(ctx context.Context, v *Env, set *seeds.Set, st seeds.S
 		if err != nil {
 			return "", err
 		}
-		dest := expand(st.Dest)
+		dest, err := personalize(st, vals, expand(st.Dest), brand.Path)
+		if err != nil {
+			return "", err
+		}
+		if st.Personalize {
+			out, err := vals.RenderFile(string(b), dest)
+			if err != nil {
+				return "", err
+			}
+			b = []byte(out)
+		}
 		rec.Info(st.Name, "copying %s (%d bytes) to %s:%s", st.File, len(b), st.Target, dest)
 		spec := targets.RunSpec{Container: st.Container, Pod: st.Pod, Namespace: st.Namespace, InstanceID: st.InstanceID, Timeout: timeout}
 		return fmt.Sprintf("%d bytes", len(b)), cp.CopyTo(ctx, spec, dest, b, 0o644)
@@ -598,7 +664,7 @@ func (e *Engine) runStep(ctx context.Context, v *Env, set *seeds.Set, st seeds.S
 	return "", fmt.Errorf("unknown step kind %q", st.Kind)
 }
 
-func (e *Engine) httpStep(ctx context.Context, set *seeds.Set, st seeds.Step, expand func(string) string, rec *recorder) (string, error) {
+func (e *Engine) httpStep(ctx context.Context, set *seeds.Set, st seeds.Step, expand func(string) string, vals brand.Values, rec *recorder) (string, error) {
 	var body []byte
 	if st.BodyFile != "" {
 		b, err := set.ReadFile(st.BodyFile)
@@ -609,6 +675,17 @@ func (e *Engine) httpStep(ctx context.Context, set *seeds.Set, st seeds.Step, ex
 	} else if st.Body != "" {
 		body = []byte(expand(st.Body))
 	}
+	if body != nil && st.Personalize && bytes.Contains(body, []byte("{{")) {
+		mode, err := bodyMode(st.Headers)
+		if err != nil {
+			return "", err
+		}
+		out, err := vals.Render(string(body), mode)
+		if err != nil {
+			return "", err
+		}
+		body = []byte(out)
+	}
 	method := st.Method
 	if method == "" {
 		if body != nil {
@@ -617,7 +694,10 @@ func (e *Engine) httpStep(ctx context.Context, set *seeds.Set, st seeds.Step, ex
 			method = http.MethodGet
 		}
 	}
-	u := expand(st.URL)
+	u, err := personalize(st, vals, expand(st.URL), brand.URL)
+	if err != nil {
+		return "", err
+	}
 	req, err := http.NewRequestWithContext(ctx, method, u, bytes.NewReader(body))
 	if err != nil {
 		return "", err
@@ -626,7 +706,11 @@ func (e *Engine) httpStep(ctx context.Context, set *seeds.Set, st seeds.Step, ex
 		req.Header.Set("Content-Type", "application/json")
 	}
 	for k, val := range st.Headers {
-		req.Header.Set(k, expand(val))
+		hv, err := personalize(st, vals, expand(val), brand.Raw)
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set(k, hv)
 	}
 	rec.Info(st.Name, "%s %s (%d bytes)", method, u, len(body))
 	client := &http.Client{Timeout: st.Timeout.Or(60 * time.Second), Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, TLSClientConfig: &tls.Config{InsecureSkipVerify: st.Insecure, MinVersion: tls.VersionTLS12}}}
@@ -681,9 +765,10 @@ func (e *Engine) runVerify(ctx context.Context, v *Env, c seeds.Check, rec *reco
 		}
 		return fmtNum(val), nil
 	case "http":
-		dep := config.Dependency{Name: c.Name, Kind: config.KindHTTP, URL: c.URL, ExpectStatus: c.ExpectStatus, ExpectBody: c.ExpectBody}
+		u := v.expand(c.URL)
+		dep := config.Dependency{Name: c.Name, Kind: config.KindHTTP, URL: u, ExpectStatus: c.ExpectStatus, ExpectBody: c.ExpectBody}
 		r := v.Prober.Probe(ctx, dep)
-		rec.Info(step, "%s: %s", c.URL, r.Message)
+		rec.Info(step, "%s: %s", u, r.Message)
 		if !r.OK {
 			return "", errors.New(r.Message)
 		}
@@ -693,13 +778,30 @@ func (e *Engine) runVerify(ctx context.Context, v *Env, c seeds.Check, rec *reco
 		if err != nil {
 			return "", err
 		}
-		res, err := ex.Run(ctx, targets.RunSpec{Argv: c.Command}, rec.Sink(step))
+		argv := make([]string, len(c.Command))
+		for i, a := range c.Command {
+			argv[i] = v.expand(a)
+		}
+		res, err := ex.Run(ctx, targets.RunSpec{Argv: argv, Env: v.Config.Env}, rec.Sink(step))
 		if err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("exit %d", res.ExitCode), res.Error()
 	}
 	return "", fmt.Errorf("unknown verify kind %q", c.Kind)
+}
+
+// expand substitutes ${VAR} from the environment's env block, then the
+// process environment, as steps do. A verify check may run sh -c with its
+// own variables, so a ${VAR} that neither knows and that has no default is
+// left as written.
+func (v *Env) expand(s string) string {
+	return config.ExpandKnown(s, func(k string) (string, bool) {
+		if val, ok := v.Config.Env[k]; ok {
+			return val, true
+		}
+		return os.LookupEnv(k)
+	})
 }
 
 // databaseName returns the configured name or asks the server.

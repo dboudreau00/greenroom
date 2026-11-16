@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/dboudreau00/greenroom/internal/config"
+	"github.com/dboudreau00/greenroom/internal/demos"
 	"github.com/dboudreau00/greenroom/internal/probe"
 	"github.com/dboudreau00/greenroom/internal/seeds"
 	"github.com/dboudreau00/greenroom/internal/sqlrun"
@@ -32,6 +33,11 @@ type EnvSummary struct {
 	Personas    []string       `json:"personas"`
 	StaleAfter  string         `json:"staleAfter"`
 	Problems    []string       `json:"problems,omitempty"`
+	// Template is the template and modules the environment was built from.
+	Template *config.TemplateRef `json:"template,omitempty"`
+	// NextDemo is the next booked demo; LiveDemo the one on stage now.
+	NextDemo *demos.Brief `json:"nextDemo,omitempty"`
+	LiveDemo *demos.Brief `json:"liveDemo,omitempty"`
 }
 
 // DepView is one dependency with its live state.
@@ -81,6 +87,8 @@ type EnvDetail struct {
 	Targets      []TargetBrief          `json:"targets"`
 	Env          map[string]string      `json:"env,omitempty"`
 	Dir          string                 `json:"dir"`
+	// Demos are the environment's demos, latest first.
+	Demos []demos.Brief `json:"demos"`
 }
 
 // TargetBrief is a target's name and kind.
@@ -117,7 +125,8 @@ func (e *Engine) Summary(ctx context.Context, v *Env) EnvSummary {
 	}
 	s := EnvSummary{Name: v.Config.Name, Title: v.Config.DisplayTitle(), Owner: v.Config.Owner, Description: v.Config.Description,
 		Readiness: readiness, Summary: summary, Deps: len(v.Config.Dependencies), LastProbe: last, Busy: e.Busy(v),
-		SeedSets: len(v.Seeds), Personas: seeds.Personas(v.Seeds), StaleAfter: humanDuration(v.Config.StaleAfter.Or(config.DefaultStaleAfter))}
+		SeedSets: len(v.Seeds), Personas: seeds.Personas(v.Seeds), StaleAfter: humanDuration(v.Config.StaleAfter.Or(config.DefaultStaleAfter)),
+		Template: v.Config.Template}
 	if s.Personas == nil {
 		s.Personas = []string{}
 	}
@@ -146,6 +155,9 @@ func (e *Engine) Summary(ctx context.Context, v *Env) EnvSummary {
 	}
 	if v.SeedsErr != nil {
 		s.Problems = append(s.Problems, v.SeedsErr.Error())
+	}
+	if all, err := e.demos.Briefs(); err == nil {
+		s.NextDemo, s.LiveDemo = demoMarks(all, v.Config.Name, e.Now())
 	}
 	return s
 }
@@ -249,6 +261,10 @@ func (e *Engine) Detail(ctx context.Context, v *Env, drift bool) (*EnvDetail, er
 			host = t.Region
 		}
 		d.Targets = append(d.Targets, TargetBrief{Name: n, Kind: t.Kind, Host: host})
+	}
+	d.Demos, _ = e.ListDemos(DemoFilter{Env: v.Config.Name, Scope: "all", Limit: 50})
+	if d.Demos == nil {
+		d.Demos = []demos.Brief{}
 	}
 	if len(v.Config.Env) > 0 {
 		d.Env = map[string]string{}

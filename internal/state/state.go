@@ -47,6 +47,15 @@ type Applied struct {
 	// Baselines holds the drift check values observed right after the reset,
 	// keyed by dependency then check name, for checks with no explicit expect.
 	Baselines map[string]map[string]float64 `json:"baselines,omitempty"`
+	// Brand is the brand kit the reset personalized the demo for.
+	Brand *AppliedBrand `json:"brand,omitempty"`
+}
+
+// AppliedBrand records the brand kit used by a reset.
+type AppliedBrand struct {
+	Slug string `json:"slug"`
+	Name string `json:"name"`
+	Hash string `json:"hash"`
 }
 
 // Sample is one probe observation.
@@ -128,6 +137,7 @@ type Run struct {
 	Persona   string        `json:"persona,omitempty"`
 	Version   int           `json:"version,omitempty"`
 	SetHash   string        `json:"setHash,omitempty"`
+	Brand     string        `json:"brand,omitempty"`
 	Actor     string        `json:"actor,omitempty"`
 	Status    string        `json:"status"`
 	StartedAt time.Time     `json:"startedAt"`
@@ -146,6 +156,7 @@ type RunSummary struct {
 	Kind      string        `json:"kind"`
 	Persona   string        `json:"persona,omitempty"`
 	Version   int           `json:"version,omitempty"`
+	Brand     string        `json:"brand,omitempty"`
 	Actor     string        `json:"actor,omitempty"`
 	Status    string        `json:"status"`
 	StartedAt time.Time     `json:"startedAt"`
@@ -159,7 +170,7 @@ type RunSummary struct {
 
 // Brief strips the log from a run.
 func (r *Run) Brief() RunSummary {
-	s := RunSummary{ID: r.ID, Env: r.Env, Kind: r.Kind, Persona: r.Persona, Version: r.Version, Actor: r.Actor,
+	s := RunSummary{ID: r.ID, Env: r.Env, Kind: r.Kind, Persona: r.Persona, Version: r.Version, Brand: r.Brand, Actor: r.Actor,
 		Status: r.Status, StartedAt: r.StartedAt, EndedAt: r.EndedAt, Duration: r.Duration, Error: r.Error, Summary: r.Summary, Steps: len(r.Steps)}
 	for _, st := range r.Steps {
 		if st.Status == StatusFailed {

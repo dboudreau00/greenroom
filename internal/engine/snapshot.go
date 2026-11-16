@@ -36,8 +36,9 @@ type dockerMount struct {
 	File        string `json:"file"`
 }
 
-// Snapshot captures a known-good baseline for a dependency.
-func (e *Engine) Snapshot(ctx context.Context, envName, depName, actor string) (*state.Run, error) {
+// Snapshot captures a known-good baseline for a dependency. override
+// allows it while a booked demo is on stage.
+func (e *Engine) Snapshot(ctx context.Context, envName, depName, actor string, override bool) (*state.Run, error) {
 	v, err := e.Env(envName)
 	if err != nil {
 		return nil, err
@@ -46,16 +47,21 @@ func (e *Engine) Snapshot(ctx context.Context, envName, depName, actor string) (
 	if !ok {
 		return nil, fmt.Errorf("unknown dependency %q", depName)
 	}
+	live, err := e.guardLive(v.Config.Name, override)
+	if err != nil {
+		return nil, err
+	}
 	rec := e.newRun(v.Config.Name, state.RunSnapshot, actor)
 	if err := e.acquire(v, rec.ID()); err != nil {
 		return rec.Finish(err, ""), err
 	}
 	defer e.release(v)
+	e.noteOverride(live, actor, "snapshot of "+dep.Name, rec.ID())
 	return e.runSnapshot(ctx, v, *dep, rec)
 }
 
 // StartSnapshot captures a snapshot in the background and returns the run id.
-func (e *Engine) StartSnapshot(envName, depName, actor string) (string, error) {
+func (e *Engine) StartSnapshot(envName, depName, actor string, override bool) (string, error) {
 	v, err := e.Env(envName)
 	if err != nil {
 		return "", err
@@ -64,11 +70,16 @@ func (e *Engine) StartSnapshot(envName, depName, actor string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("unknown dependency %q", depName)
 	}
+	live, err := e.guardLive(v.Config.Name, override)
+	if err != nil {
+		return "", err
+	}
 	rec := e.newRun(v.Config.Name, state.RunSnapshot, actor)
 	if err := e.acquire(v, rec.ID()); err != nil {
 		rec.discard()
 		return "", err
 	}
+	e.noteOverride(live, actor, "snapshot of "+dep.Name, rec.ID())
 	go func() {
 		defer e.release(v)
 		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)

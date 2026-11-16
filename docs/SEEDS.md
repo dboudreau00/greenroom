@@ -23,10 +23,57 @@ Every file in the directory, including `seed.json`, is hashed and the hash
 is recorded when the set is applied. Editing any file afterwards makes the
 environment stale.
 
-Versions never change in place. To evolve a persona, copy `v2` to `v3`,
-edit, and bump `pin.version` in `environment.json` when the new set is
-ready. Old versions stay applicable, which is what you want when a
-prospect's second call needs exactly what they saw on the first.
+Versions never change in place. To evolve a persona, bump it to a new
+version, edit the copy, and pin the environment to it when it is ready; see
+[Versioning](#versioning). Old versions stay applicable, which is what you
+want when a prospect's second call needs exactly what they saw on the
+first.
+
+## Versioning
+
+```bash
+greenroom seeds bump acme-demo cfo                     # copy the latest cfo set to the next version
+greenroom seeds bump acme-demo cfo --from v1 --title "CFO persona: Larkspur close" --pin
+greenroom seeds diff acme-demo cfo@v2 cfo@v3           # exit 0 identical, 1 different
+greenroom seeds diff acme-demo cfo@v3 retail-ops@v1 --stat
+```
+
+`seeds bump` copies `seeds/<persona>/v<from>/` (default: the latest) to
+`v<N+1>`, where N is the highest version on disk, so bumping an old version
+never overwrites a newer one. Every file is copied except hidden
+directories, which the set hash skips too. In the copy's `seed.json` only
+the top-level `version` (inserted when absent) and, with `--title`, the
+`title` are rewritten; comments, key order and formatting stay as they
+were. The copy is built in a hidden directory, loaded, and renamed into
+place only when it has no problem the source did not have. The bump is
+refused when the target version already exists.
+
+`--pin` points `pin` in `environment.json` at the new version the same
+way: the `version` inside the top-level `pin` object is replaced or
+inserted, `persona` only when it differs, and the rest of the file,
+comments included, is left alone. Without `--pin` the environment keeps
+its pin and the new set shows as `newer-version` in the stale report.
+
+A bump only writes files. A reset that is already running keeps the set
+it loaded; the next one sees the new version.
+
+`seeds diff <env> <from> <to>` compares two sets of one environment. The
+personas may differ. It reports:
+
+- files added, removed, changed and unchanged, by content hash;
+- for each changed text file, a unified diff with three lines of context,
+  after CRLF is normalized to LF. A file that differs only in line endings
+  or a trailing newline says so. A file with a NUL byte in its first 8 KiB,
+  or that is not valid UTF-8, is binary: sizes and hashes only. A file diff
+  stops at 2,000 lines of output, or diffs only the first 256 KiB of each
+  side, and says it was truncated;
+- the manifest by meaning: title and description changes, other changed
+  top-level fields, and steps and verify checks added, removed or changed
+  by name, with the fields that changed.
+
+`--stat` drops the line diffs; `--json` prints the structure the API
+returns. In the portal, each version on the Seed sets tab has "Compare with
+vN" and each persona "New version".
 
 ## `seed.json`
 
@@ -53,7 +100,10 @@ reset.
 
 Steps run in order. A failing step fails the run unless it sets
 `continueOnError`. Every step takes `name`, `kind`, optional `timeout`,
-`env` (extra variables, `${VAR}` expanded) and `continueOnError`.
+`env` (extra variables, `${VAR}` expanded) and `continueOnError`. `sql`,
+`command`, `http` and `copy` steps also take `personalize`, which fills
+`{{brand.name}}` and the other brand placeholders at reset time; see
+[PERSONALIZE.md](PERSONALIZE.md).
 
 | Kind | Fields | What happens |
 | --- | --- | --- |
@@ -62,6 +112,7 @@ Steps run in order. A failing step fails the run unless it sets
 | `command` | `target`, `command` (argv), optional `file` as stdin, location fields | Runs a program on the target. |
 | `http` | `url`, `method`, `headers`, `body` or `bodyFile`, `expectStatus`, `insecure` | Sends a request. Handy for fixtures loaded through an admin API. |
 | `copy` | `target`, `file`, `dest`, location fields | Copies a file to the target (docker, kubernetes, ssh, ssm, local). |
+| `asset` | `asset`, `target`, `dest`, location fields, optional `file` as fallback | Copies an image from the brand kit chosen for the reset; without one, the fallback file. See [PERSONALIZE.md](PERSONALIZE.md). |
 | `wait` | `dependency`, `timeout` | Polls the dependency's probe until it passes. |
 
 Location fields select where a shell, command or copy step runs:
@@ -71,7 +122,12 @@ resource such as `deployment/db`), `instanceId` (aws through SSM). With no
 
 `${VAR}` is expanded in `url`, `headers`, `command`, `body`, `dest` and
 `env` values from the step's `env`, then the environment's `env`, then the
-process environment. File contents are used verbatim.
+process environment. Verify checks expand `url` and `command` from the
+environment's `env` and the process environment, with one difference: a
+`${NAME}` whose name is set in neither and that has no `:-default` is left
+as written, so a check such as `["sh", "-c", "for n in 1 2; do echo ${n}; done"]`
+keeps its own shell variables. `$$` is still a literal `$`. File contents
+are used verbatim, unless the step sets `personalize`.
 
 ## Verify
 
@@ -136,6 +192,8 @@ wiped, and read-only mounts are skipped.
 | `drift-error` | stale or warn | A drift check could not be evaluated. Stale when it passed right after the reset (the seeded data is gone), otherwise a warning. |
 | `redeployed`, `server-changed`, `output-changed` | warn | Workload generation, database version or probe output changed. |
 | `probe-warning` | warn | Certificate expiring, healthcheck starting, and similar. |
+| `brand-changed` | stale | The brand kit the reset used was edited or re-fetched since. |
+| `brand-missing` | stale | The brand kit the reset used was deleted. |
 | `newer-version` | info | A newer version of the pinned persona exists. |
 | `app-changed`, `cert-rotated` | info | Application version or certificate changed. |
 

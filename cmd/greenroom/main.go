@@ -44,9 +44,21 @@ Commands:
   snapshot    capture a known-good baseline for a dependency
   heal        run a dependency's heal action
   envs        list environments
-  seeds       list seed sets of an environment
+  seeds       list seed sets of an environment; "seeds diff" compares two, "seeds bump"
+              copies one to the next version (so "seeds" can not list an
+              environment named diff or bump)
   targets     check connectivity of an environment's targets
   validate    load every environment and seed set and report problems
+  templates   list the environment templates and their product modules
+  new         create an environment from a template with the modules to show
+  brands      list brand kits used to personalize demos
+  brand       fetch a brand kit from a prospect's link, edit it, add assets
+  book        book a demo on an environment; the portal prepares it before the start
+  demos       list upcoming demos (--past, --all)
+  demo        show a demo, add to its journal, set its outcome, cancel it, log a past one
+  debriefs    demos waiting for a debrief, ratings, outcomes, top gaps and competitors
+  debrief     write or update the debrief of a demo that is done
+  gaps        the gaps board: list, show, set, merge, export as Markdown or CSV
   init        scaffold a workspace with the bundled example environment
   version     print the version
 
@@ -112,6 +124,26 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return c.targets(cargs)
 	case "validate":
 		return c.validate(cargs)
+	case "templates":
+		return c.templates(cargs)
+	case "new":
+		return c.newEnv(cargs)
+	case "brands":
+		return c.brands(cargs)
+	case "brand":
+		return c.brand(cargs)
+	case "book":
+		return c.book(cargs)
+	case "demos":
+		return c.demoList(cargs)
+	case "demo":
+		return c.demo(cargs)
+	case "debriefs":
+		return c.debriefs(cargs)
+	case "debrief":
+		return c.debrief(cargs)
+	case "gaps":
+		return c.gaps(cargs)
 	}
 	fmt.Fprintf(stderr, "unknown command %q\n\n%s", cmd, usage)
 	return 3
@@ -126,6 +158,17 @@ type cli struct {
 }
 
 func (c *cli) load(quiet bool) error {
+	if err := c.open(quiet); err != nil {
+		return err
+	}
+	if len(c.eng.Envs()) == 0 {
+		return fmt.Errorf("no environments found under %s (run greenroom init, or pass -C to the workspace directory)", c.ws.EnvironmentsDir)
+	}
+	return nil
+}
+
+// open loads the workspace and engine without requiring any environment.
+func (c *cli) open(quiet bool) error {
 	ws, err := config.LoadWorkspace(c.dir)
 	if err != nil {
 		return err
@@ -144,9 +187,6 @@ func (c *cli) load(quiet bool) error {
 	c.eng.Version = Version
 	if err := c.eng.Reload(); err != nil {
 		fmt.Fprintf(c.stderr, "warning: %v\n", err)
-	}
-	if len(c.eng.Envs()) == 0 {
-		return fmt.Errorf("no environments found under %s (run greenroom init, or pass -C to the workspace directory)", ws.EnvironmentsDir)
 	}
 	return nil
 }
@@ -389,13 +429,15 @@ func (c *cli) reset(args []string) int {
 	version := fs.Int("version", 0, "seed version (default: pinned or latest)")
 	force := fs.Bool("force", false, "continue even if the preflight finds dependencies down")
 	skip := fs.Bool("skip-reset", false, "apply seed steps without running reset strategies")
+	brandSlug := fs.String("brand", "", "brand kit to personalize the demo for (greenroom brands lists them)")
+	override := fs.Bool("override", false, "reset even while a booked demo is live on the environment")
 	yes := fs.Bool("yes", false, "do not ask for confirmation")
 	asJSON := fs.Bool("json", false, "print the run as JSON when done")
 	if err := fs.Parse(reorder(fs, args)); err != nil {
 		return 3
 	}
 	if fs.NArg() < 1 {
-		return c.fail(errors.New("usage: greenroom reset <env> [--persona p] [--version n] [--force] [--yes]"))
+		return c.fail(errors.New("usage: greenroom reset <env> [--persona p] [--version n] [--force] [--override] [--yes]"))
 	}
 	if err := c.load(true); err != nil {
 		return c.fail(err)
@@ -417,7 +459,11 @@ func (c *cli) reset(args []string) int {
 		return c.fail(err)
 	}
 	if !*yes {
-		fmt.Fprintf(c.stdout, "About to reset %s to %s (%s). Everything demoed since the last reset is discarded.\nContinue? [y/N] ", v.Config.DisplayTitle(), set.ID(), set.DisplayTitle())
+		forBrand := ""
+		if *brandSlug != "" {
+			forBrand = " for brand " + *brandSlug
+		}
+		fmt.Fprintf(c.stdout, "About to reset %s to %s (%s)%s. Everything demoed since the last reset is discarded.\nContinue? [y/N] ", v.Config.DisplayTitle(), set.ID(), set.DisplayTitle(), forBrand)
 		var answer string
 		fmt.Fscanln(os.Stdin, &answer)
 		if !strings.HasPrefix(strings.ToLower(answer), "y") {
@@ -425,7 +471,7 @@ func (c *cli) reset(args []string) int {
 			return 1
 		}
 	}
-	id, err := c.eng.StartReset(name, engine.ResetOptions{Persona: set.Persona, Version: set.Version, Force: *force, SkipReset: *skip, Actor: "cli"})
+	id, err := c.eng.StartReset(name, engine.ResetOptions{Persona: set.Persona, Version: set.Version, Force: *force, SkipReset: *skip, Brand: *brandSlug, Override: *override, Actor: "cli"})
 	if err != nil {
 		return c.fail(err)
 	}
@@ -492,16 +538,17 @@ func (c *cli) printLine(l state.LogLine) {
 
 func (c *cli) snapshot(args []string) int {
 	fs := newFlags("snapshot", c.stderr)
+	override := fs.Bool("override", false, "snapshot even while a booked demo is live on the environment")
 	if err := fs.Parse(reorder(fs, args)); err != nil {
 		return 3
 	}
 	if fs.NArg() < 2 {
-		return c.fail(errors.New("usage: greenroom snapshot <env> <dependency>"))
+		return c.fail(errors.New("usage: greenroom snapshot <env> <dependency> [--override]"))
 	}
 	if err := c.load(true); err != nil {
 		return c.fail(err)
 	}
-	id, err := c.eng.StartSnapshot(fs.Arg(0), fs.Arg(1), "cli")
+	id, err := c.eng.StartSnapshot(fs.Arg(0), fs.Arg(1), "cli", *override)
 	if err != nil {
 		return c.fail(err)
 	}
@@ -568,13 +615,21 @@ func (c *cli) envs(args []string) int {
 }
 
 func (c *cli) seeds(args []string) int {
+	if len(args) > 0 {
+		switch args[0] {
+		case "diff":
+			return c.seedsDiff(args[1:])
+		case "bump":
+			return c.seedsBump(args[1:])
+		}
+	}
 	fs := newFlags("seeds", c.stderr)
 	asJSON := fs.Bool("json", false, "print as JSON")
 	if err := fs.Parse(reorder(fs, args)); err != nil {
 		return 3
 	}
 	if fs.NArg() < 1 {
-		return c.fail(errors.New("usage: greenroom seeds <env>"))
+		return c.fail(errors.New("usage: greenroom seeds <env>, seeds diff <env> <from> <to>, seeds bump <env> <persona>"))
 	}
 	if err := c.load(true); err != nil {
 		return c.fail(err)

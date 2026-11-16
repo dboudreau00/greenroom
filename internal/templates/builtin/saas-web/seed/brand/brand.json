@@ -1,0 +1,8 @@
+{
+  "name": "{{brand.name}}",
+  "tagline": "{{brand.tagline}}",
+  "domain": "{{brand.domain}}",
+  "primary": "{{brand.primary}}",
+  "accent": "{{brand.accent}}",
+  "logo": "{{brand.logo}}"
+}

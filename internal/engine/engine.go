@@ -12,11 +12,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dboudreau00/greenroom/internal/brand"
 	"github.com/dboudreau00/greenroom/internal/config"
+	"github.com/dboudreau00/greenroom/internal/demos"
+	"github.com/dboudreau00/greenroom/internal/gaps"
 	"github.com/dboudreau00/greenroom/internal/probe"
 	"github.com/dboudreau00/greenroom/internal/registry"
 	"github.com/dboudreau00/greenroom/internal/seeds"
 	"github.com/dboudreau00/greenroom/internal/state"
+	"github.com/dboudreau00/greenroom/internal/webfetch"
 )
 
 // Env is a loaded environment with its live helpers.
@@ -43,11 +47,16 @@ type Engine struct {
 	log   *slog.Logger
 	Now   func() time.Time
 
-	mu      sync.RWMutex
-	envs    map[string]*Env
-	loadErr error
-	latest  map[string]map[string]probe.Result
-	active  map[string]*recorder
+	mu       sync.RWMutex
+	createMu sync.Mutex
+	envs     map[string]*Env
+	loadErr  error
+	latest   map[string]map[string]probe.Result
+	active   map[string]*recorder
+	brands   *brand.Store
+	demos    *demos.Store
+	gaps     *gaps.Store
+	fetcher  *webfetch.Client
 	// Version is shown in the UI and the CLI.
 	Version string
 }
@@ -58,7 +67,11 @@ func New(ws *config.Workspace, store *state.Store, logger *slog.Logger) *Engine 
 		logger = slog.Default()
 	}
 	return &Engine{ws: ws, store: store, log: logger, Now: time.Now,
-		envs: map[string]*Env{}, latest: map[string]map[string]probe.Result{}, active: map[string]*recorder{}, Version: "dev"}
+		envs: map[string]*Env{}, latest: map[string]map[string]probe.Result{}, active: map[string]*recorder{}, Version: "dev",
+		brands:  brand.Open(store.Dir()),
+		demos:   demos.Open(store.Dir()),
+		gaps:    gaps.Open(store.Dir()),
+		fetcher: webfetch.New(webfetch.Options{AllowPrivate: ws.LinkFetch.AllowPrivate, Timeout: ws.LinkFetch.Timeout.Or(15 * time.Second)})}
 }
 
 // Workspace returns the workspace config.
@@ -162,7 +175,7 @@ func (e *Engine) acquire(v *Env, runID string) error {
 		e.mu.RLock()
 		busy := v.busy
 		e.mu.RUnlock()
-		return fmt.Errorf("environment %s is busy with run %s", v.Config.Name, busy)
+		return fmt.Errorf("environment %s is %w with run %s", v.Config.Name, ErrBusy, busy)
 	}
 	e.mu.Lock()
 	v.busy = runID

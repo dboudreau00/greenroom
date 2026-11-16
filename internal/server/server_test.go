@@ -22,6 +22,12 @@ import (
 
 func newTestServer(t *testing.T, token string) (*httptest.Server, *engine.Engine) {
 	t.Helper()
+	return newTestServerWS(t, token, "")
+}
+
+// newTestServerWS writes wsJSON as greenroom.json when it is not empty.
+func newTestServerWS(t *testing.T, token, wsJSON string) (*httptest.Server, *engine.Engine) {
+	t.Helper()
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
 	t.Cleanup(api.Close)
 	dir := t.TempDir()
@@ -32,6 +38,9 @@ func newTestServer(t *testing.T, token string) (*httptest.Server, *engine.Engine
 	b, _ := json.Marshal(env)
 	os.WriteFile(filepath.Join(envDir, config.EnvironmentFile), b, 0o644)
 	os.WriteFile(filepath.Join(envDir, "seeds", "cfo", "v1", config.SeedFile), []byte(`{"steps":[{"name":"ping","kind":"http","url":"`+api.URL+`/seed"}]}`), 0o644)
+	if wsJSON != "" {
+		os.WriteFile(filepath.Join(dir, config.WorkspaceFile), []byte(wsJSON), 0o644)
+	}
 	ws, err := config.LoadWorkspace(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -233,5 +242,55 @@ func TestOpenAccessAndListenGuard(t *testing.T) {
 	}
 	if !isLoopback("127.0.0.1:8470") || !isLoopback("[::1]:1") || isLoopback("0.0.0.0:1") || isLoopback(":8470") {
 		t.Fatal("isLoopback")
+	}
+}
+
+func bearer(t *testing.T, method, url, body string) (*http.Response, string) {
+	t.Helper()
+	var rd io.Reader
+	if body != "" {
+		rd = strings.NewReader(body)
+	}
+	req, _ := http.NewRequest(method, url, rd)
+	req.Header.Set("Authorization", "Bearer secret")
+	return do(t, req)
+}
+
+func TestTemplatesAndCreate(t *testing.T) {
+	srv, eng := newTestServer(t, "secret")
+	resp, body := bearer(t, http.MethodGet, srv.URL+"/api/v1/templates", "")
+	if resp.StatusCode != 200 || !strings.Contains(body, `"name": "saas-web"`) || !strings.Contains(body, `"productType": "SaaS web app"`) {
+		t.Fatalf("templates: %d %s", resp.StatusCode, body)
+	}
+	resp, body = bearer(t, http.MethodPost, srv.URL+"/api/v1/environments", `{"template":"saas-web","name":"preview","modules":["support"],"dryRun":true}`)
+	if resp.StatusCode != 200 || !strings.Contains(body, `"accounts"`) || !strings.Contains(body, "seeds/support-lead/v1/seed.json") {
+		t.Fatalf("dry run: %d %s", resp.StatusCode, body)
+	}
+	if _, err := eng.Env("preview"); err == nil {
+		t.Fatal("dry run created the environment")
+	}
+	resp, body = bearer(t, http.MethodPost, srv.URL+"/api/v1/environments", `{"template":"saas-web","name":"sales-demo","title":"Sales demo","modules":["billing"],"persona":"cfo"}`)
+	if resp.StatusCode != 201 {
+		t.Fatalf("create: %d %s", resp.StatusCode, body)
+	}
+	resp, body = bearer(t, http.MethodGet, srv.URL+"/api/v1/environments/sales-demo", "")
+	if resp.StatusCode != 200 || !strings.Contains(body, `"pinned": "cfo@v1"`) || !strings.Contains(body, `"productType": "SaaS web app"`) {
+		t.Fatalf("created env: %d %s", resp.StatusCode, body)
+	}
+	if resp, body := bearer(t, http.MethodPost, srv.URL+"/api/v1/environments", `{"template":"saas-web","name":"sales-demo"}`); resp.StatusCode != 409 {
+		t.Fatalf("duplicate: %d %s", resp.StatusCode, body)
+	}
+	if resp, body := bearer(t, http.MethodPost, srv.URL+"/api/v1/environments", `{"template":"saas-web","name":"demo"}`); resp.StatusCode != 409 {
+		t.Fatalf("existing env name: %d %s", resp.StatusCode, body)
+	}
+	for _, bad := range []string{
+		`{"template":"nope","name":"x"}`,
+		`{"template":"saas-web","name":"../x"}`,
+		`{"template":"saas-web","name":"x","params":{"webPort":"$(id)"}}`,
+		`{"template":"saas-web","name":"x","title":"<img src=x>"}`,
+	} {
+		if resp, body := bearer(t, http.MethodPost, srv.URL+"/api/v1/environments", bad); resp.StatusCode != 400 {
+			t.Fatalf("%s: %d %s", bad, resp.StatusCode, body)
+		}
 	}
 }

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/dboudreau00/greenroom/internal/engine"
+	"github.com/dboudreau00/greenroom/internal/templates"
 	"github.com/dboudreau00/greenroom/internal/ui"
 )
 
@@ -71,6 +72,8 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/v1/me", s.auth(s.me))
 	m.HandleFunc("GET /api/v1/overview", s.auth(s.overview))
 	m.HandleFunc("POST /api/v1/reload", s.auth(s.reload))
+	m.HandleFunc("GET /api/v1/templates", s.auth(s.templates))
+	m.HandleFunc("POST /api/v1/environments", s.auth(s.createEnvironment))
 	m.HandleFunc("GET /api/v1/environments/{env}", s.auth(s.environment))
 	m.HandleFunc("POST /api/v1/environments/{env}/check", s.auth(s.check))
 	m.HandleFunc("GET /api/v1/environments/{env}/stale", s.auth(s.stale))
@@ -81,6 +84,10 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/v1/environments/{env}/runs", s.auth(s.runs))
 	m.HandleFunc("GET /api/v1/environments/{env}/runs/{id}", s.auth(s.run))
 	m.HandleFunc("GET /api/v1/environments/{env}/runs/{id}/events", s.auth(s.runEvents))
+	s.brandRoutes()
+	s.demoRoutes()
+	s.debriefRoutes()
+	s.seedRoutes()
 }
 
 func (s *Server) withHeaders(next http.Handler) http.Handler {
@@ -233,6 +240,14 @@ func jsonError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]any{"error": msg})
 }
 
+// runStatus maps a refused run: busy or booked environments are 409.
+func runStatus(err error) int {
+	if errors.Is(err, engine.ErrBusy) || errors.Is(err, engine.ErrBooked) {
+		return http.StatusConflict
+	}
+	return http.StatusBadRequest
+}
+
 func boolParam(r *http.Request, name string, def bool) bool {
 	v := r.URL.Query().Get(name)
 	if v == "" {
@@ -279,6 +294,11 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	if err := s.eng.LoadError(); err != nil {
 		out["loadError"] = err.Error()
 	}
+	if since, err := engine.ParseSince("", s.eng.Now()); err == nil {
+		if n, err := s.eng.PendingDebriefs(since); err == nil {
+			out["debriefsPending"] = n
+		}
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -289,6 +309,51 @@ func (s *Server) reload(w http.ResponseWriter, r *http.Request) {
 		out["error"] = err.Error()
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) templates(w http.ResponseWriter, r *http.Request) {
+	list, err := s.eng.Templates()
+	if err != nil && list == nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := []templates.Info{}
+	for _, t := range list {
+		out = append(out, t.Describe())
+	}
+	resp := map[string]any{"templates": out, "templatesDir": s.eng.Workspace().TemplatesDir}
+	if err != nil {
+		resp["loadError"] = err.Error()
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) createEnvironment(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		templates.Request
+		Template string `json:"template"`
+		DryRun   bool   `json:"dryRun"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&body); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad json: "+err.Error())
+		return
+	}
+	plan, err := s.eng.CreateEnvironment(body.Template, body.Request, body.DryRun)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, engine.ErrExists) {
+			status = http.StatusConflict
+		}
+		jsonError(w, status, err.Error())
+		return
+	}
+	status := http.StatusCreated
+	if body.DryRun {
+		status = http.StatusOK
+	} else {
+		s.log.Info("environment created", "env", plan.Name, "template", plan.Template, "actor", actorOf(r))
+	}
+	writeJSON(w, status, map[string]any{"name": plan.Name, "plan": plan, "files": plan.Paths()})
 }
 
 func (s *Server) environment(w http.ResponseWriter, r *http.Request) {
@@ -334,6 +399,8 @@ func (s *Server) reset(w http.ResponseWriter, r *http.Request) {
 		Version   int    `json:"version"`
 		Force     bool   `json:"force"`
 		SkipReset bool   `json:"skipReset"`
+		Brand     string `json:"brand"`
+		Override  bool   `json:"override"`
 	}
 	if r.Body != nil && r.ContentLength != 0 {
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&body); err != nil {
@@ -341,14 +408,13 @@ func (s *Server) reset(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	id, err := s.eng.StartReset(r.PathValue("env"), engine.ResetOptions{Persona: body.Persona, Version: body.Version, Force: body.Force, SkipReset: body.SkipReset, Actor: actorOf(r)})
+	id, err := s.eng.StartReset(r.PathValue("env"), engine.ResetOptions{Persona: body.Persona, Version: body.Version, Force: body.Force, SkipReset: body.SkipReset, Brand: body.Brand, Override: body.Override, Actor: actorOf(r)})
 	if err != nil {
-		status := http.StatusBadRequest
-		if strings.Contains(err.Error(), "busy") {
-			status = http.StatusConflict
-		}
-		jsonError(w, status, err.Error())
+		jsonError(w, runStatus(err), err.Error())
 		return
+	}
+	if body.Override {
+		s.log.Info("reset with override", "env", r.PathValue("env"), "run", id, "actor", actorOf(r))
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"runId": id})
 }
@@ -356,18 +422,15 @@ func (s *Server) reset(w http.ResponseWriter, r *http.Request) {
 func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Dependency string `json:"dependency"`
+		Override   bool   `json:"override"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&body); err != nil {
 		jsonError(w, http.StatusBadRequest, "bad json: "+err.Error())
 		return
 	}
-	id, err := s.eng.StartSnapshot(r.PathValue("env"), body.Dependency, actorOf(r))
+	id, err := s.eng.StartSnapshot(r.PathValue("env"), body.Dependency, actorOf(r), body.Override)
 	if err != nil {
-		status := http.StatusBadRequest
-		if strings.Contains(err.Error(), "busy") {
-			status = http.StatusConflict
-		}
-		jsonError(w, status, err.Error())
+		jsonError(w, runStatus(err), err.Error())
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"runId": id})

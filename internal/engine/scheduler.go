@@ -9,14 +9,16 @@ import (
 )
 
 // RunScheduler probes every environment on the workspace interval, records
-// uptime samples, triggers automatic heals and compacts old samples. It
-// returns when ctx is cancelled.
+// uptime samples, triggers automatic heals and compacts old samples. Booked
+// demos advance on a second ticker of at most 30 seconds. It returns when
+// ctx is cancelled.
 func (e *Engine) RunScheduler(ctx context.Context) {
 	interval := e.ws.ProbeInterval.D()
 	if interval < 5*time.Second {
 		interval = 5 * time.Second
 	}
 	e.log.Info("scheduler started", "interval", interval)
+	go e.runDemoLoop(ctx, interval)
 	lastCompact := time.Time{}
 	for {
 		e.tick(ctx)

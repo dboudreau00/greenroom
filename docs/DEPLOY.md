@@ -19,6 +19,13 @@ the place that can see the most of your demo estate.
   loopback unless `--insecure` is passed.
 - Mutating calls from the browser need the `X-Requested-With: greenroom`
   header, which the UI sends; that blocks cross-site form posts.
+- Links people paste for brand kits are fetched by one guarded client:
+  http and https on ports 80 and 443, every dialled address checked
+  after DNS so loopback, private, link-local and metadata addresses are
+  refused, no proxy, re-validated redirects, a size and time cap.
+  Fetched SVG with script or external references is refused, and assets
+  are served sandboxed. `linkFetch.allowPrivate` lifts the address check;
+  see [PERSONALIZE.md](PERSONALIZE.md).
 - Secrets never leave the process: DSN passwords and authorization headers
   are redacted in every API response and run log.
 - Put TLS in front (load balancer, ingress, Caddy). Server-sent events need
