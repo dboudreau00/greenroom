@@ -15,8 +15,8 @@ the portal session cookie. Responses are JSON. Errors are
 | GET | `/api/v1/environments/{env}?drift=true` | Full detail: dependencies with uptime, seed sets, runs, snapshots, heals, stale report, targets. |
 | POST | `/api/v1/environments/{env}/check?record=true&drift=true` | Run the pre-call check now; returns the report. |
 | GET | `/api/v1/environments/{env}/stale?drift=true` | Stale report only. |
-| POST | `/api/v1/environments/{env}/reset` | Body `{"persona":"cfo","version":2,"force":false,"skipReset":false,"brand":"larkspur"}`. `brand` is a brand kit slug; empty uses the house brand. Returns `{"runId":...}` with 202. 409 when the environment is busy, 400 for an unknown brand kit. |
-| POST | `/api/v1/environments/{env}/snapshot` | Body `{"dependency":"postgres"}`. Returns `{"runId":...}`. |
+| POST | `/api/v1/environments/{env}/reset` | Body `{"persona":"cfo","version":2,"force":false,"skipReset":false,"brand":"larkspur","override":false}`. `brand` is a brand kit slug; empty uses the house brand. Returns `{"runId":...}` with 202. 409 when the environment is busy or a booked demo is live on it (`override` goes ahead and notes it in the demo's journal), 400 for an unknown brand kit. |
+| POST | `/api/v1/environments/{env}/snapshot` | Body `{"dependency":"postgres","override":false}`. Returns `{"runId":...}`. 409 when busy or a booked demo is live. |
 | POST | `/api/v1/environments/{env}/dependencies/{dep}/heal` | Returns `{"runId":...}`. |
 | GET | `/api/v1/environments/{env}/targets` | Pings every target. |
 | GET | `/api/v1/environments/{env}/runs?limit=50` | Run summaries, running ones first. |
@@ -30,6 +30,15 @@ the portal session cookie. Responses are JSON. Errors are
 | POST | `/api/v1/brands/{slug}/assets` | Fetch one more image. Body `{"name":"hero","url":"https://larkspur.example/hero.webp"}`. 201 with the kit. |
 | GET | `/api/v1/brands/{slug}/assets/{name}` | The image, served with the content type decided when it was stored, `nosniff` and a sandboxing `Content-Security-Policy`. |
 | DELETE | `/api/v1/brands/{slug}/assets/{name}` | Remove one asset. |
+| GET | `/api/v1/demos?env=&scope=upcoming\|past\|all&limit=` | Demos in short form. `upcoming` is the default. |
+| POST | `/api/v1/demos` | Book a demo, or log a past one with `"booked": false`. 201 with the record, 409 for an overlapping booking. |
+| GET | `/api/v1/demos/{id}` | One demo with its journal. 404 when unknown. |
+| PATCH | `/api/v1/demos/{id}` | Edit; the slot, seed set and brand only while scheduled (409 otherwise). |
+| POST | `/api/v1/demos/{id}/cancel` | Cancel. The record stays. |
+| POST | `/api/v1/demos/{id}/prepare` | Prepare a scheduled demo now. 202 with `{"runId":...,"demo":...}`. |
+| POST | `/api/v1/demos/{id}/journal` | Body `{"kind":"note","text":"..."}`. 201 with the record. |
+| DELETE | `/api/v1/demos/{id}/journal/{entryId}` | Remove an entry; 409 for a system entry. |
+| GET | `/api/v1/demos.ics?env=` | RFC 5545 calendar of booked demos that are not cancelled. |
 
 Mutating requests made with the session cookie must also send
 `X-Requested-With: greenroom`. Bearer requests do not.
@@ -58,7 +67,17 @@ curl -N -H "Authorization: Bearer $TOKEN" \
 ```
 
 Brand kit links go through the guarded link fetcher; see
-[PERSONALIZE.md](PERSONALIZE.md).
+[PERSONALIZE.md](PERSONALIZE.md). Demo fields, statuses and the scheduler
+are in [DEMOS.md](DEMOS.md).
+
+Book a demo and pull the calendar:
+
+```bash
+curl -fsS -H "Authorization: Bearer $TOKEN" -X POST \
+  -d '{"env":"acme-demo","title":"Tidewell discovery","start":"2026-11-20T15:00:00Z","duration":"45m","brand":"tidewell"}' \
+  https://greenroom.example.com/api/v1/demos | jq -r .id
+curl -fsS -H "Authorization: Bearer $TOKEN" -o demos.ics https://greenroom.example.com/api/v1/demos.ics
+```
 
 Personalize a reset for a prospect:
 

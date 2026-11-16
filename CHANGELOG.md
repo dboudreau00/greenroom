@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.5.0
+
+Demo bookings, a demo tracker and a demo journal.
+
+- Demo records under `state/_demos/<id>.json`: prospect, environment,
+  seed set, optional brand kit, time slot, stage, outcome, next step,
+  attendees, status and a journal. Text is cleaned and capped.
+- `greenroom book <env> --at ... --for 45m --title ...` books a demo.
+  Starts at least a minute out, at most 12 hours long, no overlap with
+  another booking on the environment; environment, seed set and brand kit
+  must exist. `greenroom demo log` records a demo after the fact.
+- The portal's scheduler prepares booked demos on its own ticker: a reset
+  to the demo's seed set and brand kit `prepLead` before the start (default
+  30m), a recorded pre-call check, then `ready`, `live` at the start,
+  `done` at the end, and with `--reset-after` a reset to the pin with the
+  house brand. Busy environments are retried; demos nobody prepared become
+  `missed`. Every step lands in the journal and survives a restart.
+- Live protection: while a booked demo is on stage, resets and snapshots
+  of its environment are refused (409, "booked") unless `override` or
+  `--override` is given; the override is journaled. Heals stay allowed.
+- `greenroom demos`, `demo show`, `demo note`, `demo set`, `demo cancel`.
+- Portal: Demos page with upcoming, past and all, an environment filter,
+  book and log dialogs and an `.ics` export; a demo page with countdown,
+  run links, Prepare now, Cancel, editable stage, outcome, next step and
+  attendees, and the journal timeline. Upcoming demos on the overview,
+  the next demo on environment cards, a live notice, a Book a demo button
+  and a Demos tab on the environment page, and the override in the reset
+  and snapshot dialogs.
+- API: `/api/v1/demos` and its journal, `prepare` and `cancel`,
+  `/api/v1/demos.ics` (RFC 5545), `override` in the reset and snapshot
+  bodies, `nextDemo` and `liveDemo` on environment summaries.
+
 ## 0.4.0
 
 Personalization.

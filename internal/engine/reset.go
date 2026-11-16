@@ -33,7 +33,10 @@ type ResetOptions struct {
 	// Brand is the brand kit to personalize the demo for; empty uses the
 	// environment's house brand.
 	Brand string
-	Actor string
+	// Override resets even while a booked demo is on stage; the demo's
+	// journal records it.
+	Override bool
+	Actor    string
 }
 
 // StartReset launches a reset in the background and returns its run id.
@@ -53,11 +56,16 @@ func (e *Engine) StartReset(envName string, opts ResetOptions) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	live, err := e.guardLive(v.Config.Name, opts.Override)
+	if err != nil {
+		return "", err
+	}
 	rec := e.newRun(v.Config.Name, state.RunReset, opts.Actor)
 	if err := e.acquire(v, rec.ID()); err != nil {
 		rec.discard()
 		return "", err
 	}
+	e.noteOverride(live, opts.Actor, "reset", rec.ID())
 	go func() {
 		defer e.release(v)
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
@@ -84,11 +92,16 @@ func (e *Engine) Reset(ctx context.Context, envName string, opts ResetOptions) (
 	if err != nil {
 		return nil, err
 	}
+	live, err := e.guardLive(v.Config.Name, opts.Override)
+	if err != nil {
+		return nil, err
+	}
 	rec := e.newRun(v.Config.Name, state.RunReset, opts.Actor)
 	if err := e.acquire(v, rec.ID()); err != nil {
 		return rec.Finish(err, ""), err
 	}
 	defer e.release(v)
+	e.noteOverride(live, opts.Actor, "reset", rec.ID())
 	run := e.runReset(ctx, v, set, kit, opts, rec)
 	if run.Status != state.StatusOK {
 		return run, errors.New(run.Error)

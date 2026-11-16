@@ -105,6 +105,24 @@ every address it dials, and refuses SVG that could run script. An edited
 or deleted kit shows up in the stale report. See
 [docs/PERSONALIZE.md](docs/PERSONALIZE.md).
 
+## Book the demo, not just the environment
+
+A booked demo ties a prospect, an environment, a seed set and a brand kit
+to a time slot. Before the call the portal resets the environment for the
+prospect and runs the pre-call check; while the demo is live it refuses
+other resets unless someone overrides; afterwards it can reset back to the
+pin. Every demo keeps a journal, and the tracker and an `.ics` feed show
+what is coming.
+
+```bash
+greenroom book acme-crm --at "2026-11-20 15:00" --for 45m --title "Larkspur discovery" \
+  --prospect Larkspur --persona cfo@v2 --brand larkspur --reset-after
+greenroom demos
+greenroom demo note 20261120-1500-3f9a --kind issue "Export took 40s on the orders page"
+```
+
+See [docs/DEMOS.md](docs/DEMOS.md).
+
 ## Five minutes to green
 
 ```bash
@@ -213,13 +231,15 @@ decorative animation turns itself off under `prefers-reduced-motion`.
 | --- | --- | --- |
 | `greenroom check <env>` | Probe every dependency, record samples, report readiness and staleness | 0 green, 1 amber, 2 red |
 | `greenroom stale <env>` | Compare pin, applied record, fingerprints and drift checks | 0 fresh, 1 stale |
-| `greenroom reset <env> [persona@vN] [--brand slug]` | Reset strategies, seed steps, verify, record; personalized for a brand kit | 0 ok, 1 failed |
+| `greenroom reset <env> [persona@vN] [--brand slug] [--override]` | Reset strategies, seed steps, verify, record; personalized for a brand kit | 0 ok, 1 failed |
 | `greenroom snapshot <env> <dep>` | Capture a Postgres template or a Docker commit with volumes | |
 | `greenroom heal <env> <dep>` | Run a dependency's heal action and re-probe | |
 | `greenroom new <env> --template t [--modules a,b]` | Create an environment from a template | |
 | `greenroom templates [name]` | Templates, their modules, personas and params | |
 | `greenroom brand fetch <url> [--slug s] [--name n] [--replace]` | Build a brand kit from a prospect's site | |
 | `greenroom brands`, `brand show`, `brand set`, `brand asset`, `brand rm` | List, inspect, edit, extend and delete brand kits | |
+| `greenroom book <env> --at time --for 45m --title t` | Book a demo; the portal prepares it before the start | |
+| `greenroom demos [--past\|--all]`, `demo show`, `demo note`, `demo set`, `demo cancel`, `demo log` | Demo tracker and journal from the shell | |
 | `greenroom seeds <env>`, `envs`, `targets`, `validate` | Listings and config checks | |
 | `greenroom serve` | Portal, API and the background prober | |
 | `greenroom init` | Scaffold a workspace with the bundled example | |
@@ -245,6 +265,7 @@ run logs.
 - [docs/SEEDS.md](docs/SEEDS.md): the seed set format, step kinds, what a reset does, the stale rules
 - [docs/TEMPLATES.md](docs/TEMPLATES.md): environment templates, product modules, writing your own
 - [docs/PERSONALIZE.md](docs/PERSONALIZE.md): brand kits, the link fetcher, brand placeholders and their escaping
+- [docs/DEMOS.md](docs/DEMOS.md): booked demos, the scheduler timeline, live protection, the journal, tracker and calendar
 - [docs/DEPLOY.md](docs/DEPLOY.md): hosting, security model, upgrades
 - [docs/API.md](docs/API.md): the HTTP API and server-sent events
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how the packages fit together

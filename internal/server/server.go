@@ -85,6 +85,7 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/v1/environments/{env}/runs/{id}", s.auth(s.run))
 	m.HandleFunc("GET /api/v1/environments/{env}/runs/{id}/events", s.auth(s.runEvents))
 	s.brandRoutes()
+	s.demoRoutes()
 }
 
 func (s *Server) withHeaders(next http.Handler) http.Handler {
@@ -237,6 +238,14 @@ func jsonError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]any{"error": msg})
 }
 
+// runStatus maps a refused run: busy or booked environments are 409.
+func runStatus(err error) int {
+	if errors.Is(err, engine.ErrBusy) || errors.Is(err, engine.ErrBooked) {
+		return http.StatusConflict
+	}
+	return http.StatusBadRequest
+}
+
 func boolParam(r *http.Request, name string, def bool) bool {
 	v := r.URL.Query().Get(name)
 	if v == "" {
@@ -384,6 +393,7 @@ func (s *Server) reset(w http.ResponseWriter, r *http.Request) {
 		Force     bool   `json:"force"`
 		SkipReset bool   `json:"skipReset"`
 		Brand     string `json:"brand"`
+		Override  bool   `json:"override"`
 	}
 	if r.Body != nil && r.ContentLength != 0 {
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&body); err != nil {
@@ -391,14 +401,13 @@ func (s *Server) reset(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	id, err := s.eng.StartReset(r.PathValue("env"), engine.ResetOptions{Persona: body.Persona, Version: body.Version, Force: body.Force, SkipReset: body.SkipReset, Brand: body.Brand, Actor: actorOf(r)})
+	id, err := s.eng.StartReset(r.PathValue("env"), engine.ResetOptions{Persona: body.Persona, Version: body.Version, Force: body.Force, SkipReset: body.SkipReset, Brand: body.Brand, Override: body.Override, Actor: actorOf(r)})
 	if err != nil {
-		status := http.StatusBadRequest
-		if strings.Contains(err.Error(), "busy") {
-			status = http.StatusConflict
-		}
-		jsonError(w, status, err.Error())
+		jsonError(w, runStatus(err), err.Error())
 		return
+	}
+	if body.Override {
+		s.log.Info("reset with override", "env", r.PathValue("env"), "run", id, "actor", actorOf(r))
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"runId": id})
 }
@@ -406,18 +415,15 @@ func (s *Server) reset(w http.ResponseWriter, r *http.Request) {
 func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Dependency string `json:"dependency"`
+		Override   bool   `json:"override"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&body); err != nil {
 		jsonError(w, http.StatusBadRequest, "bad json: "+err.Error())
 		return
 	}
-	id, err := s.eng.StartSnapshot(r.PathValue("env"), body.Dependency, actorOf(r))
+	id, err := s.eng.StartSnapshot(r.PathValue("env"), body.Dependency, actorOf(r), body.Override)
 	if err != nil {
-		status := http.StatusBadRequest
-		if strings.Contains(err.Error(), "busy") {
-			status = http.StatusConflict
-		}
-		jsonError(w, status, err.Error())
+		jsonError(w, runStatus(err), err.Error())
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"runId": id})

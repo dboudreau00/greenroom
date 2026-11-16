@@ -51,6 +51,9 @@ Commands:
   new         create an environment from a template with the modules to show
   brands      list brand kits used to personalize demos
   brand       fetch a brand kit from a prospect's link, edit it, add assets
+  book        book a demo on an environment; the portal prepares it before the start
+  demos       list upcoming demos (--past, --all)
+  demo        show a demo, add to its journal, set its outcome, cancel it, log a past one
   init        scaffold a workspace with the bundled example environment
   version     print the version
 
@@ -124,6 +127,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return c.brands(cargs)
 	case "brand":
 		return c.brand(cargs)
+	case "book":
+		return c.book(cargs)
+	case "demos":
+		return c.demoList(cargs)
+	case "demo":
+		return c.demo(cargs)
 	}
 	fmt.Fprintf(stderr, "unknown command %q\n\n%s", cmd, usage)
 	return 3
@@ -410,13 +419,14 @@ func (c *cli) reset(args []string) int {
 	force := fs.Bool("force", false, "continue even if the preflight finds dependencies down")
 	skip := fs.Bool("skip-reset", false, "apply seed steps without running reset strategies")
 	brandSlug := fs.String("brand", "", "brand kit to personalize the demo for (greenroom brands lists them)")
+	override := fs.Bool("override", false, "reset even while a booked demo is live on the environment")
 	yes := fs.Bool("yes", false, "do not ask for confirmation")
 	asJSON := fs.Bool("json", false, "print the run as JSON when done")
 	if err := fs.Parse(reorder(fs, args)); err != nil {
 		return 3
 	}
 	if fs.NArg() < 1 {
-		return c.fail(errors.New("usage: greenroom reset <env> [--persona p] [--version n] [--force] [--yes]"))
+		return c.fail(errors.New("usage: greenroom reset <env> [--persona p] [--version n] [--force] [--override] [--yes]"))
 	}
 	if err := c.load(true); err != nil {
 		return c.fail(err)
@@ -450,7 +460,7 @@ func (c *cli) reset(args []string) int {
 			return 1
 		}
 	}
-	id, err := c.eng.StartReset(name, engine.ResetOptions{Persona: set.Persona, Version: set.Version, Force: *force, SkipReset: *skip, Brand: *brandSlug, Actor: "cli"})
+	id, err := c.eng.StartReset(name, engine.ResetOptions{Persona: set.Persona, Version: set.Version, Force: *force, SkipReset: *skip, Brand: *brandSlug, Override: *override, Actor: "cli"})
 	if err != nil {
 		return c.fail(err)
 	}
@@ -517,16 +527,17 @@ func (c *cli) printLine(l state.LogLine) {
 
 func (c *cli) snapshot(args []string) int {
 	fs := newFlags("snapshot", c.stderr)
+	override := fs.Bool("override", false, "snapshot even while a booked demo is live on the environment")
 	if err := fs.Parse(reorder(fs, args)); err != nil {
 		return 3
 	}
 	if fs.NArg() < 2 {
-		return c.fail(errors.New("usage: greenroom snapshot <env> <dependency>"))
+		return c.fail(errors.New("usage: greenroom snapshot <env> <dependency> [--override]"))
 	}
 	if err := c.load(true); err != nil {
 		return c.fail(err)
 	}
-	id, err := c.eng.StartSnapshot(fs.Arg(0), fs.Arg(1), "cli")
+	id, err := c.eng.StartSnapshot(fs.Arg(0), fs.Arg(1), "cli", *override)
 	if err != nil {
 		return c.fail(err)
 	}

@@ -36,6 +36,7 @@
     folder: svg('<path d="M12 10v6"/><path d="M9 13h6"/><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>', 19),
     check: svg('<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>'),
     info: svg('<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>'),
+    calendar: svg('<rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/>', 19),
     xcircle: svg('<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>'),
     ring: '<svg width="13" height="13" viewBox="0 0 16 16" class="ring" aria-hidden="true"><circle cx="8" cy="8" r="6.4" stroke="currentColor" stroke-width="2" fill="none" opacity="0.25"/><path d="M8 1.6a6.4 6.4 0 0 1 6.4 6.4" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>'
   };
@@ -203,8 +204,8 @@
       '<div class="grid stagger">' + [0, 1, 2].map(skeletonCard).join('') + '</div></div>';
     var first = true;
     var draw = function () {
-      return api('/api/v1/overview').then(function (data) {
-        var envs = data.environments || [];
+      return Promise.all([api('/api/v1/overview'), api('/api/v1/demos?scope=upcoming&limit=5').catch(function () { return []; })]).then(function (res) {
+        var data = res[0], envs = data.environments || [];
         var html = '<div class="spotlight"></div><div class="page' + (first ? '' : ' static') + '">' +
           '<header class="page-head rise"><div><h1>Demo environments</h1><div class="sub">' + envs.length + ' environment' + (envs.length === 1 ? '' : 's') + ' in <span class="mono dim">' + esc(data.environmentsDir) + '</span>, probed every <span class="mono dim">' + esc(data.probeInterval) + '</span></div></div>' +
           '<div class="actions"><button class="btn primary" id="act-new"><span>New environment</span></button></div></header>';
@@ -212,7 +213,7 @@
         if (!envs.length) {
           html += '<div class="card empty rise" style="margin-top:24px"><span class="icon-tile">' + I.folder + '</span><h2>No environments yet</h2><p>Start from a template with the product modules you want to show, or run <span class="mono dim">greenroom init</span> for the bundled example.</p></div>';
         } else {
-          html += '<div class="grid stagger">' + envs.map(envCard).join('') + '</div>';
+          html += demoStrip(res[1]) + '<div class="grid stagger">' + envs.map(envCard).join('') + '</div>';
         }
         app.innerHTML = html + '</div>';
         var nb = document.getElementById('act-new');
@@ -229,13 +230,14 @@
     var chips = (e.down ? ' ' + chip('red', e.down + ' down') : '') + (e.warn ? ' ' + chip('amber', e.warn + ' warn') : '');
     return '<a class="card link env-card pad" href="#/env/' + esc(e.name) + '" style="--i:' + i + '">' +
       '<h2>' + readinessBadge(e.readiness) + '<span class="title"><b>' + esc(e.title) + '</b><span>' + esc(e.summary) + '</span></span>' +
-      (e.busy ? badge('blue', 'busy', { dot: true }) : '') + '</h2>' +
+      (e.busy ? badge('blue', 'busy', { dot: true }) : '') + (e.liveDemo ? badge('green', 'live demo', { dot: true }) : '') + '</h2>' +
       '<dl>' +
       '<div><dt>Pinned</dt><dd><b class="mono">' + esc(e.pinned || 'none') + '</b></dd></div>' +
       '<div><dt>Applied</dt><dd>' + applied + '</dd></div>' +
       '<div><dt>Dependencies</dt><dd><b class="num">' + e.deps + '</b>' + chips + '</dd></div>' +
       '<div><dt>Stale</dt><dd style="color:' + (e.stale ? 'var(--gr-amber)' : 'var(--gr-green)') + '">' + (e.stale ? e.stale + ' item' + (e.stale === 1 ? '' : 's') : 'fresh') + '</dd></div>' +
       '<div><dt>Uptime 24h</dt><dd>' + (e.lastProbe ? '<b class="num">' + pct(e.uptime24h) + '</b>' : '<span class="muted">no samples</span>') + '</dd></div>' +
+      '<div><dt>Next demo</dt><dd>' + (e.liveDemo ? badge('green', 'live until ' + hm(e.liveDemo.end), { dot: true }) : e.nextDemo ? '<b>' + esc(dayLabel(e.nextDemo.start) + ', ' + hm(e.nextDemo.start)) + '</b>' : '<span class="muted">none booked</span>') + '</dd></div>' +
       '<div><dt>Owner</dt><dd>' + esc(e.owner || '') + '</dd></div>' +
       '</dl>' + templateLine(e.template) + '</a>';
   }
@@ -508,10 +510,387 @@
     });
   }
 
+  // ---------- demos ----------
+  var DEMO_STAGES = ['intro', 'discovery', 'deep-dive', 'poc', 'executive', 'other'];
+  var DEMO_OUTCOMES = ['positive', 'neutral', 'negative', 'no-show', 'rescheduled'];
+  var DEMO_KINDS = ['note', 'issue', 'question', 'follow-up', 'feedback'];
+  var demoScope = 'upcoming', demoEnv = '';
+  function demoFinal(st) { return st === 'done' || st === 'missed' || st === 'cancelled'; }
+  function demoBadge(st) {
+    var map = { scheduled: 'blue', preparing: 'blue', ready: 'green', 'prep-failed': 'red', live: 'green', done: 'grey', missed: 'amber', cancelled: 'grey' };
+    return badge(map[st] || 'grey', st, { dot: st === 'preparing' || st === 'live' });
+  }
+  function outcomeChip(o) {
+    if (!o) return '<span class="muted small">none</span>';
+    var map = { positive: 'green', neutral: 'grey', negative: 'red', 'no-show': 'amber', rescheduled: 'blue' };
+    return chip(map[o] || 'grey', o);
+  }
+  function kindChip(k) {
+    var map = { note: 'blue', issue: 'red', question: 'amber', 'follow-up': 'green', feedback: 'blue', system: 'grey' };
+    return chip(map[k] || 'grey', k);
+  }
+  function hm(iso) { var d = new Date(iso); return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
+  function dayLabel(iso) { var d = new Date(iso); return isNaN(d.getTime()) ? '' : d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }); }
+  function slotText(b) {
+    var s = dayLabel(b.start) + ', ' + hm(b.start);
+    if (b.end && new Date(b.end).getTime() > new Date(b.start).getTime()) s += ' to ' + (dayLabel(b.end) === dayLabel(b.start) ? '' : dayLabel(b.end) + ', ') + hm(b.end);
+    return s;
+  }
+  function span(ms) {
+    var m = Math.max(0, Math.round(ms / 60000));
+    if (m < 60) return m + 'm';
+    var h = Math.floor(m / 60);
+    if (h < 48) return h + 'h' + (m % 60 ? ' ' + (m % 60) + 'm' : '');
+    return Math.floor(h / 24) + 'd';
+  }
+  function countdown(b) {
+    var now = Date.now(), s = new Date(b.start).getTime(), e = new Date(b.end).getTime();
+    if (b.status === 'cancelled') return 'cancelled';
+    if (now < s) return 'in ' + span(s - now);
+    if (now < e && !demoFinal(b.status)) return 'on now, ends in ' + span(e - now);
+    return 'ended ' + span(now - Math.max(e, s)) + ' ago';
+  }
+  function setChip(b) { return b.persona ? chip('green', b.persona + '@v' + b.version) : ''; }
+  function loadKits() {
+    return api('/api/v1/brands').then(function (list) { var m = {}; (list || []).forEach(function (k) { m[k.slug] = k; }); return m; }).catch(function () { return {}; });
+  }
+  function prospectCell(b, kits) {
+    var k = b.brand && kits[b.brand];
+    var name = b.prospect || (k ? k.name : '');
+    return '<span class="prospect-cell">' + (k ? kitLogo(k, 22) : '') + '<span class="ellipsis">' + (name ? esc(name) : '<span class="muted">none</span>') + '</span></span>';
+  }
+  function brandChip(d, kits) {
+    var k = d.brand && kits[d.brand];
+    if (k) return '<span class="brand-chip">' + kitLogo(k, 18) + '<span>' + esc(k.name) + '</span></span>';
+    return d.brand ? chip('blue', d.brand) : chip('grey', 'house brand');
+  }
+  function demoRows(list, kits, withEnv) {
+    return list.map(function (b, i) {
+      return '<tr style="--i:' + i + '"><td class="nowrap"><div class="small">' + esc(slotText(b)) + '</div><div class="xs muted">' + esc(countdown(b)) + '</div></td>' +
+        '<td><a href="#/demos/' + esc(b.id) + '" class="demo-title">' + esc(b.title) + '</a>' + (b.booked ? '' : ' ' + chip('grey', 'logged')) +
+        '<div class="xs muted">' + esc(b.stage) + (b.owner ? ', ' + esc(b.owner) : '') + '</div></td>' +
+        '<td>' + prospectCell(b, kits) + '</td>' +
+        (withEnv ? '<td><a class="mono small" href="#/env/' + esc(b.env) + '">' + esc(b.env) + '</a></td>' : '') +
+        '<td>' + setChip(b) + '</td><td>' + demoBadge(b.status) + '</td>' +
+        '<td>' + (b.readiness ? readinessBadge(b.readiness) : '<span class="muted small">none</span>') + '</td>' +
+        '<td>' + outcomeChip(b.outcome) + '</td><td class="num">' + esc(b.journalCount) + '</td></tr>';
+    }).join('');
+  }
+  function demoTable(list, kits, withEnv) {
+    return '<div class="scroll"><table class="demo-table" style="min-width:' + (withEnv ? 1040 : 920) + 'px"><thead><tr><th>When</th><th>Title</th><th>Prospect</th>' + (withEnv ? '<th>Environment</th>' : '') +
+      '<th>Seed set</th><th>Status</th><th>Readiness</th><th>Outcome</th><th class="num">Journal</th></tr></thead><tbody>' + demoRows(list, kits, withEnv) + '</tbody></table></div>';
+  }
+  function demoStrip(list) {
+    if (!list || !list.length) return '';
+    return '<section class="demo-strip rise"><div class="strip-head"><h3>Upcoming demos</h3><a class="small" href="#/demos">All demos</a></div><div class="strip-list stagger">' + list.map(function (b, i) {
+      return '<a class="card link demo-chip" href="#/demos/' + esc(b.id) + '" style="--i:' + i + '"><span class="dc-top">' + demoBadge(b.status) + '<span class="xs muted">' + esc(countdown(b)) + '</span></span>' +
+        '<b class="dc-title">' + esc(b.title) + '</b><span class="xs muted dc-when">' + esc(dayLabel(b.start) + ', ' + hm(b.start)) + ' on <span class="mono">' + esc(b.env) + '</span></span></a>';
+    }).join('') + '</div></section>';
+  }
+
+  function renderDemos() {
+    stopLive();
+    envView = null;
+    setCrumbs([{ label: 'Demos' }]);
+    app.innerHTML = '<div class="spotlight"></div><div class="page"><header class="rise"><h1>Demos</h1><div class="skel" style="width:300px;height:12px;margin-top:10px"></div></header></div>';
+    var first = true;
+    var draw = function () {
+      var q = '?scope=' + encodeURIComponent(demoScope) + (demoEnv ? '&env=' + encodeURIComponent(demoEnv) : '');
+      return Promise.all([api('/api/v1/demos' + q), api('/api/v1/overview'), loadKits()]).then(function (r) {
+        var list = r[0] || [], envs = r[1].environments || [], kits = r[2];
+        if (demoEnv && !envs.some(function (e) { return e.name === demoEnv; })) envs.push({ name: demoEnv, title: demoEnv });
+        var seg = [['upcoming', 'Upcoming'], ['past', 'Past'], ['all', 'All']].map(function (s) {
+          return '<button type="button" class="seg-btn' + (s[0] === demoScope ? ' active' : '') + '" data-scope="' + s[0] + '" aria-pressed="' + (s[0] === demoScope) + '">' + s[1] + '</button>';
+        }).join('');
+        var envOpts = '<option value="">All environments</option>' + envs.map(function (e) {
+          return '<option value="' + esc(e.name) + '"' + (e.name === demoEnv ? ' selected' : '') + '>' + esc(e.title || e.name) + '</option>';
+        }).join('');
+        var word = { upcoming: 'upcoming', past: 'past', all: '' }[demoScope];
+        var html = '<div class="spotlight"></div><div class="page' + (first ? '' : ' static') + '">' +
+          '<header class="page-head rise"><div><h1>Demos</h1><div class="sub">' + list.length + (word ? ' ' + word : '') + ' demo' + (list.length === 1 ? '' : 's') + (demoEnv ? ' on <span class="mono dim">' + esc(demoEnv) + '</span>' : '') + '</div></div>' +
+          '<div class="actions"><a class="btn ghost" href="/api/v1/demos.ics' + (demoEnv ? '?env=' + encodeURIComponent(demoEnv) : '') + '" download><span>.ics export</span></a>' +
+          '<button class="btn" id="act-log"><span>Log a past demo</span></button><button class="btn primary" id="act-book"><span>Book a demo</span></button></div></header>' +
+          '<div class="demo-filters rise"><div class="seg" role="group" aria-label="Which demos">' + seg + '</div>' +
+          '<label class="sr-only" for="df-env">Environment</label><select id="df-env" class="select">' + envOpts + '</select></div>';
+        if (!list.length) {
+          html += '<div class="card empty rise" style="margin-top:16px"><span class="icon-tile">' + I.calendar + '</span><h2>' + (demoScope === 'upcoming' ? 'Nothing booked' : 'No demos here yet') + '</h2>' +
+            '<p>A booked demo gets its environment reset to the seed set and checked before the call, and held while it is live.</p></div>';
+        } else {
+          html += '<div class="stagger" style="margin-top:16px"><section class="card table-wrap" style="--i:0">' + demoTable(list, kits, true) + '</section></div>';
+        }
+        app.innerHTML = html + '</div>';
+        first = false;
+        Array.prototype.forEach.call(app.querySelectorAll('[data-scope]'), function (b) {
+          b.addEventListener('click', function () { demoScope = b.getAttribute('data-scope'); draw().catch(function (e) { toast('Could not load demos', 'error', e.message); }); });
+        });
+        document.getElementById('df-env').addEventListener('change', function (ev) { demoEnv = ev.target.value; draw().catch(function (e) { toast('Could not load demos', 'error', e.message); }); });
+        document.getElementById('act-book').addEventListener('click', function () { demoDialog('book', demoEnv); });
+        document.getElementById('act-log').addEventListener('click', function () { demoDialog('log', demoEnv); });
+      });
+    };
+    draw().catch(function (e) { app.innerHTML = '<div class="alert">' + I.alert + '<div><b>Could not load demos</b>' + esc(e.message) + '</div></div>'; });
+    timer = setInterval(function () { if (!document.getElementById('modal-root').innerHTML) draw().catch(function () {}); }, 30000);
+  }
+
+  function demoHeadHtml(d, kits) {
+    var runs = [['prepRunId', 'prep run'], ['checkRunId', 'pre-call check'], ['cleanupRunId', 'cleanup run']].filter(function (r) { return d[r[0]]; });
+    var prepAt = d.booked && d.status === 'scheduled' ? new Date(new Date(d.start).getTime() - (d.prepLeadMs || 0)) : null;
+    return '<div class="titles"><h1><span>' + esc(d.title) + '</span>' + demoBadge(d.status) + (d.booked ? '' : chip('grey', 'logged')) + '</h1>' +
+      '<p>' + esc(slotText(d)) + ' <span class="muted">(' + esc(countdown(d)) + ')</span>' + (prepAt ? '<span class="muted">, prep at ' + esc(hm(prepAt.toISOString())) + '</span>' : '') + '</p>' +
+      '<div class="tpl-line"><a class="mono" href="#/env/' + esc(d.env) + '">' + esc(d.env) + '</a>' + setChip(d) + brandChip(d, kits) +
+      (d.prospect ? '<span class="dim">' + esc(d.prospect) + '</span>' : '') + (d.readiness ? readinessBadge(d.readiness) : '') + (d.outcome ? outcomeChip(d.outcome) : '') + '</div>' +
+      (runs.length ? '<div class="run-links small">' + runs.map(function (r) { return '<a href="#/env/' + esc(d.env) + '/run/' + esc(d[r[0]]) + '">' + esc(r[1]) + '</a>'; }).join('') + '</div>' : '') + '</div>' +
+      '<div class="actions">' + (d.booked && d.status === 'scheduled' ? '<button class="btn" id="act-prepare"><span>Prepare now</span></button>' : '') +
+      (demoFinal(d.status) ? '' : '<button class="btn ghost" id="act-cancel"><span>Cancel demo</span></button>') + '</div>';
+  }
+  function demoNoticesHtml(d) {
+    var html = '';
+    if (d.error) html += '<div class="alert rise">' + I.alert + '<div><b>Preparation problem</b><span class="small">' + esc(d.error) + '</span></div></div>';
+    var now = Date.now();
+    if (d.booked && (d.status === 'live' || d.status === 'ready' || d.status === 'prep-failed') && now >= new Date(d.start).getTime() && now < new Date(d.end).getTime()) {
+      html += '<div class="alert info rise">' + I.info + '<div><b>Live until ' + esc(hm(d.end)) + '</b><span class="small">Resets and snapshots of ' + esc(d.env) + ' are refused unless someone overrides the live demo.</span></div></div>';
+    }
+    return html;
+  }
+  function journalHtml(d) {
+    var list = (d.journal || []).slice().reverse();
+    if (!list.length) return '<li class="muted small">No entries yet.</li>';
+    return list.map(function (e, i) {
+      var sys = e.kind === 'system';
+      return '<li class="entry' + (sys ? ' system' : '') + '" style="--i:' + i + '"><div class="entry-head">' + kindChip(e.kind) + '<span class="small dim">' + esc(e.author) + '</span>' +
+        '<span class="xs muted" title="' + esc(when(e.at)) + '">' + esc(ago(e.at)) + '</span>' +
+        (e.runId ? '<a class="xs" href="#/env/' + esc(d.env) + '/run/' + esc(e.runId) + '">run</a>' : '') + '<span class="spacer"></span>' +
+        (sys ? '' : '<button class="btn small ghost" type="button" data-entry-rm="' + esc(e.id) + '"><span>Delete</span></button>') + '</div>' +
+        '<div class="entry-text">' + esc(e.text) + '</div></li>';
+    }).join('');
+  }
+  function demoEditHtml(d) {
+    var opts = function (list, cur, empty) {
+      return (empty ? '<option value="">' + esc(empty) + '</option>' : '') + list.map(function (v) { return '<option value="' + esc(v) + '"' + (v === cur ? ' selected' : '') + '>' + esc(v) + '</option>'; }).join('');
+    };
+    return '<h3>Details</h3>' +
+      '<div class="field"><label for="de-stage">Stage</label><select id="de-stage">' + opts(DEMO_STAGES, d.stage) + '</select></div>' +
+      '<div class="field"><label for="de-outcome">Outcome</label><select id="de-outcome">' + opts(DEMO_OUTCOMES, d.outcome, 'Not yet') + '</select></div>' +
+      '<div class="field"><label for="de-next">Next step</label><input type="text" id="de-next" maxlength="500" value="' + esc(d.nextStep || '') + '"></div>' +
+      '<div class="field"><label for="de-prospect">Prospect</label><input type="text" id="de-prospect" maxlength="120" value="' + esc(d.prospect || '') + '"></div>' +
+      '<div class="field"><label for="de-att">Attendees <span class="muted">(one per line)</span></label><textarea id="de-att" rows="3">' + esc((d.attendees || []).join('\n')) + '</textarea></div>' +
+      '<div class="actions" style="margin-top:12px"><button class="btn primary" type="button" id="de-save"><span>Save</span></button></div>' +
+      '<dl class="kv" style="margin-top:16px">' +
+      '<div><dt>Owner</dt><dd>' + esc(d.owner || '') + '</dd></div>' +
+      (d.booked ? '<div><dt>Prep lead</dt><dd class="mono small">' + esc(String(d.prepLead || '').replace(/([hm])0m0s$|([hm])0s$/, '$1$2')) + '</dd></div><div><dt>After the demo</dt><dd class="small">' + (d.resetAfter ? 'reset to the pin' + (d.cleanup ? ' (' + esc(d.cleanup) + ')' : '') : 'left as is') + '</dd></div>' : '') +
+      '<div><dt>Created</dt><dd class="small">' + esc(when(d.createdAt)) + (d.createdBy ? ' by ' + esc(d.createdBy) : '') + '</dd></div>' +
+      '<div><dt>Id</dt><dd class="mono small">' + esc(d.id) + '</dd></div></dl>';
+  }
+  function parseGoDuration(s) {
+    var ms = 0, re = /([0-9.]+)(ms|h|m|s)/g, m;
+    while ((m = re.exec(String(s || '')))) ms += parseFloat(m[1]) * { h: 3600000, m: 60000, s: 1000, ms: 1 }[m[2]];
+    return ms;
+  }
+
+  function renderDemo(id) {
+    stopLive();
+    envView = null;
+    setCrumbs([{ label: 'Demos', href: '#/demos' }, { label: id }]);
+    app.innerHTML = '<div class="spotlight"></div><div class="page"><div class="skel" style="width:280px;height:22px"></div><div class="skel" style="width:380px;height:12px;margin-top:10px"></div></div>';
+    var st = { d: null, kits: {} };
+    var url = '/api/v1/demos/' + encodeURIComponent(id);
+    var wireJournal = function () {
+      Array.prototype.forEach.call(app.querySelectorAll('[data-entry-rm]'), function (b) {
+        b.addEventListener('click', function () {
+          busy(b, 'Deleting');
+          api(url + '/journal/' + encodeURIComponent(b.getAttribute('data-entry-rm')), { method: 'DELETE' })
+            .then(function (d) { show(d, false); })
+            .catch(function (e) { toast('Not deleted', 'error', e.message); b.disabled = false; b.innerHTML = '<span>Delete</span>'; });
+        });
+      });
+    };
+    var wireHeadActions = function () {
+      var prep = document.getElementById('act-prepare');
+      if (prep) prep.addEventListener('click', function () {
+        busy(prep, 'Starting');
+        api(url + '/prepare', { method: 'POST' }).then(function (r) { toast('Preparation started', 'info', r.demo.persona + '@v' + r.demo.version); show(r.demo, false); })
+          .catch(function (e) { toast('Not prepared', 'error', e.message); prep.disabled = false; prep.innerHTML = '<span>Prepare now</span>'; });
+      });
+      var cancel = document.getElementById('act-cancel');
+      if (cancel) cancel.addEventListener('click', function () {
+        modal({
+          width: 440,
+          title: '<h2>Cancel ' + esc(st.d.title) + '</h2>',
+          body: '<p class="lead">The demo stays in the tracker with its journal, marked cancelled. Its slot on ' + esc(st.d.env) + ' is freed' + (st.d.status === 'preparing' ? '; the preparation run already started and finishes on its own' : '') + '.</p>',
+          footer: '<button class="btn ghost" data-close><span>Keep it</span></button><button class="btn danger" id="dc-go"><span>Cancel demo</span></button>'
+        }, function (root, close) {
+          root.querySelector('#dc-go').addEventListener('click', function () {
+            busy(root.querySelector('#dc-go'), 'Cancelling');
+            api(url + '/cancel', { method: 'POST' }).then(function (d) { close(); toast('Demo cancelled', 'ok', d.title); show(d, false); })
+              .catch(function (e) { close(); toast('Not cancelled', 'error', e.message); });
+          });
+        });
+      });
+    };
+    var show = function (d, full) {
+      d.prepLeadMs = parseGoDuration(d.prepLead);
+      st.d = d;
+      setCrumbs([{ label: 'Demos', href: '#/demos' }, { label: d.title }]);
+      if (full) {
+        app.innerHTML = '<div class="spotlight"></div><div class="page">' +
+          '<header class="demo-head rise" id="demo-head">' + demoHeadHtml(d, st.kits) + '</header><div id="demo-notices">' + demoNoticesHtml(d) + '</div>' +
+          '<div class="demo-grid"><section class="card pad rise" style="animation-delay:40ms"><h3>Journal <span class="muted num small" id="je-total">' + (d.journal || []).length + '</span></h3>' +
+          '<form class="entry-form" id="je-form" autocomplete="off"><div class="row"><label class="sr-only" for="je-kind">Kind</label><select id="je-kind" class="select small-select">' +
+          DEMO_KINDS.map(function (k) { return '<option value="' + k + '">' + k + '</option>'; }).join('') + '</select><span class="xs muted num" id="je-count">0 / 4000</span></div>' +
+          '<label class="sr-only" for="je-text">Entry</label><textarea id="je-text" rows="3" maxlength="4000" placeholder="What they asked, what broke, what to follow up on"></textarea>' +
+          '<div class="actions"><button class="btn primary small" type="submit" id="je-go"><span>Add entry</span></button></div></form>' +
+          '<ol class="timeline stagger" id="journal">' + journalHtml(d) + '</ol></section>' +
+          '<aside class="card pad rise" style="animation-delay:80ms" id="demo-edit">' + demoEditHtml(d) + '</aside></div></div>';
+        var text = document.getElementById('je-text'), count = document.getElementById('je-count');
+        text.addEventListener('input', function () { count.textContent = text.value.length + ' / 4000'; });
+        document.getElementById('je-form').addEventListener('submit', function (ev) {
+          ev.preventDefault();
+          var go = document.getElementById('je-go');
+          if (!text.value.trim()) { text.focus(); return; }
+          busy(go, 'Adding');
+          api(url + '/journal', { method: 'POST', body: { kind: document.getElementById('je-kind').value, text: text.value } })
+            .then(function (nd) { text.value = ''; count.textContent = '0 / 4000'; show(nd, false); })
+            .catch(function (e) { toast('Entry not added', 'error', e.message); })
+            .then(function () { go.disabled = false; go.innerHTML = '<span>Add entry</span>'; });
+        });
+        wireEdit();
+      } else {
+        var head = document.getElementById('demo-head');
+        if (head) { head.classList.add('static'); head.innerHTML = demoHeadHtml(d, st.kits); }
+        var notices = document.getElementById('demo-notices');
+        if (notices) notices.innerHTML = demoNoticesHtml(d);
+        var j = document.getElementById('journal');
+        if (j) { j.classList.remove('stagger'); j.innerHTML = journalHtml(d); }
+        var total = document.getElementById('je-total');
+        if (total) total.textContent = (d.journal || []).length;
+      }
+      wireHeadActions();
+      wireJournal();
+    };
+    var wireEdit = function () {
+      var b = document.getElementById('de-save');
+      if (!b) return;
+      b.addEventListener('click', function () {
+        busy(b, 'Saving');
+        var att = document.getElementById('de-att').value.split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
+        api(url, { method: 'PATCH', body: { stage: document.getElementById('de-stage').value, outcome: document.getElementById('de-outcome').value,
+          nextStep: document.getElementById('de-next').value, prospect: document.getElementById('de-prospect').value, attendees: att } })
+          .then(function (nd) { toast('Demo saved', 'ok', nd.title); show(nd, false); document.getElementById('demo-edit').innerHTML = demoEditHtml(nd); wireEdit(); })
+          .catch(function (e) { toast('Not saved', 'error', e.message); b.disabled = false; b.innerHTML = '<span>Save</span>'; });
+      });
+    };
+    Promise.all([api(url), loadKits()]).then(function (r) { st.kits = r[1]; show(r[0], true); })
+      .catch(function (e) { app.innerHTML = '<div class="alert">' + I.alert + '<div><b>Could not load the demo</b>' + esc(e.message) + '</div></div>'; });
+    timer = setInterval(function () {
+      if (!st.d || (demoFinal(st.d.status) && st.d.cleanup !== 'pending')) return;
+      api(url).then(function (d) { if (st.d && st.d.id === d.id && location.hash.indexOf('#/demos/') === 0) show(d, false); }).catch(function () {});
+    }, 15000);
+  }
+
+  // ---------- book or log a demo ----------
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function localInput(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + 'T' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
+  // isoWithOffset turns a datetime-local value (local time) into RFC 3339
+  // with the browser's offset.
+  function isoWithOffset(v) {
+    var d = new Date(v);
+    if (!v || isNaN(d.getTime())) return '';
+    var off = -d.getTimezoneOffset(), sign = off >= 0 ? '+' : '-';
+    off = Math.abs(off);
+    return localInput(d) + ':00' + sign + pad2(Math.floor(off / 60)) + ':' + pad2(off % 60);
+  }
+  function demoDialog(mode, preEnv) {
+    var book = mode === 'book';
+    Promise.all([api('/api/v1/overview'), loadKits()]).then(function (r) {
+      var envs = r[0].environments || [], kits = r[1];
+      if (!envs.length) { toast('No environments yet', 'error', 'create one first'); return; }
+      var envName = envs.some(function (e) { return e.name === preEnv; }) ? preEnv : envs[0].name;
+      var start = new Date();
+      if (book) { start.setMinutes(0, 0, 0); start.setHours(start.getHours() + 2); } else { start.setSeconds(0, 0); start.setMinutes(start.getMinutes() - 60); }
+      var durs = [['30m', '30 minutes'], ['45m', '45 minutes'], ['1h', '1 hour'], ['1h30m', '90 minutes'], ['2h', '2 hours']];
+      var sel = function (id, list, cur) { return '<select id="' + id + '">' + list.map(function (o) { return '<option value="' + esc(o[0]) + '"' + (o[0] === cur ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('') + '</select>'; };
+      var pairs = function (list) { return list.map(function (v) { return [v, v]; }); };
+      var kitList = Object.keys(kits).map(function (k) { return kits[k]; }).sort(function (a, b) { return a.name.localeCompare(b.name); });
+      modal({
+        width: 640,
+        title: '<h2>' + (book ? 'Book a demo' : 'Log a past demo') + '</h2>',
+        body: '<p class="lead">' + (book ? 'Greenroom resets the environment to the seed set before the start, runs the pre-call check, and holds the environment while the demo is live. Preparation runs while the portal is up.'
+          : 'Record a demo that already happened so its outcome and notes sit with the rest.') + '</p>' +
+          '<div class="fields"><div class="field"><label for="bd-title">Title</label><input type="text" id="bd-title" maxlength="120" placeholder="Larkspur discovery call"></div>' +
+          '<div class="field"><label for="bd-prospect">Prospect</label><input type="text" id="bd-prospect" maxlength="120" placeholder="Larkspur"></div></div>' +
+          '<div class="fields"><div class="field"><label for="bd-env">Environment</label>' + sel('bd-env', envs.map(function (e) { return [e.name, e.title || e.name]; }), envName) + '</div>' +
+          '<div class="field"><label for="bd-at">' + (book ? 'Starts' : 'Started') + '</label><input type="datetime-local" id="bd-at" value="' + esc(localInput(start)) + '"></div></div>' +
+          '<div class="fields"><div class="field"><label for="bd-dur">Length</label>' + sel('bd-dur', durs, '45m') + '</div>' +
+          (book ? '<div class="field"><label for="bd-prep">Prepare</label>' + sel('bd-prep', [['15m', '15 minutes before'], ['30m', '30 minutes before'], ['1h', '1 hour before']], '30m') + '</div>'
+            : '<div class="field"><label for="bd-outcome">Outcome</label>' + sel('bd-outcome', [['', 'Not yet']].concat(pairs(DEMO_OUTCOMES)), '') + '</div>') + '</div>' +
+          '<div class="fields"><div class="field"><label for="bd-persona">Persona</label><select id="bd-persona"></select></div>' +
+          '<div class="field"><label for="bd-version">Version</label><select id="bd-version"></select></div></div>' +
+          '<div class="fields"><div class="field"><label for="bd-brand">Brand kit</label>' + sel('bd-brand', [['', 'House brand (no prospect)']].concat(kitList.map(function (k) { return [k.slug, k.name + (k.domain ? ' (' + k.domain + ')' : '')]; })), '') + '</div>' +
+          '<div class="field"><label for="bd-stage">Stage</label>' + sel('bd-stage', pairs(DEMO_STAGES), 'discovery') + '</div></div>' +
+          (book ? '<label class="check-row"><input type="checkbox" id="bd-after"> Reset to the pin with the house brand when the demo ends</label>' : '') +
+          '<div id="bd-error"></div>',
+        footer: '<button class="btn ghost" data-close><span>Cancel</span></button><button class="btn primary" id="bd-go"><span>' + (book ? 'Book demo' : 'Log demo') + '</span></button>'
+      }, function (root, close) {
+        var q = function (s) { return root.querySelector(s); };
+        var sets = {};
+        var fillVersions = function () {
+          var p = q('#bd-persona').value, list = (sets[p] || []).slice().reverse();
+          q('#bd-version').innerHTML = list.map(function (s) {
+            return '<option value="' + s.version + '"' + (s.pinned ? ' selected' : '') + '>v' + s.version + ', ' + esc(s.title) + (s.pinned ? ' (pinned)' : '') + ((s.problems || []).length ? ' (has problems)' : '') + '</option>';
+          }).join('');
+        };
+        var loadSets = function (name) {
+          q('#bd-persona').innerHTML = '<option>loading</option>';
+          q('#bd-version').innerHTML = '';
+          api('/api/v1/environments/' + encodeURIComponent(name)).then(function (d) {
+            if (q('#bd-env').value !== name) return;
+            sets = {};
+            d.seeds.forEach(function (s) { (sets[s.persona] = sets[s.persona] || []).push(s); });
+            var names = Object.keys(sets), pinned = d.pinned ? d.pinned.split('@')[0] : names[0];
+            q('#bd-persona').innerHTML = names.length ? names.map(function (p) { return '<option value="' + esc(p) + '"' + (p === pinned ? ' selected' : '') + '>' + esc(p) + '</option>'; }).join('') : '<option value="">no seed sets</option>';
+            fillVersions();
+          }).catch(function (e) { q('#bd-persona').innerHTML = '<option value="">could not load</option>'; toast('Could not load seed sets', 'error', e.message); });
+        };
+        q('#bd-env').addEventListener('change', function () { loadSets(q('#bd-env').value); });
+        q('#bd-persona').addEventListener('change', fillVersions);
+        q('#bd-brand').addEventListener('change', function () {
+          var k = kits[q('#bd-brand').value];
+          if (k && !q('#bd-prospect').value.trim()) q('#bd-prospect').value = k.name;
+        });
+        loadSets(envName);
+        q('#bd-title').focus();
+        q('#bd-go').addEventListener('click', function () {
+          var go = q('#bd-go'), errEl = q('#bd-error');
+          var body = { env: q('#bd-env').value, title: q('#bd-title').value.trim(), prospect: q('#bd-prospect').value.trim(), start: isoWithOffset(q('#bd-at').value),
+            duration: q('#bd-dur').value, persona: q('#bd-persona').value, version: parseInt(q('#bd-version').value, 10) || 0, brand: q('#bd-brand').value, stage: q('#bd-stage').value };
+          if (book) { body.prepLead = q('#bd-prep').value; body.resetAfter = q('#bd-after').checked; } else { body.booked = false; body.outcome = q('#bd-outcome').value; }
+          errEl.innerHTML = '';
+          if (!body.title) { errEl.innerHTML = '<div class="alert">' + I.alert + '<div><b>Title is required</b></div></div>'; q('#bd-title').focus(); return; }
+          busy(go, book ? 'Booking' : 'Saving');
+          api('/api/v1/demos', { method: 'POST', body: body }).then(function (d) {
+            close();
+            toast(book ? 'Demo booked' : 'Demo logged', 'ok', d.title + ', ' + slotText(d));
+            location.hash = '#/demos/' + d.id;
+          }).catch(function (e) {
+            errEl.innerHTML = '<div class="alert">' + I.alert + '<div><b>' + (book ? 'Not booked' : 'Not logged') + '</b>' + esc(e.message) + '</div></div>';
+            go.disabled = false; go.innerHTML = '<span>' + (book ? 'Book demo' : 'Log demo') + '</span>';
+          });
+        });
+      });
+    }).catch(function (e) { toast('Could not open the dialog', 'error', e.message); });
+  }
+
+  function demosTab(d) {
+    var list = d.demos || [];
+    var head = '<div class="table-title"><h3>Demos on this environment</h3><button class="btn small primary" id="act-book-tab"><span>Book a demo</span></button></div>';
+    if (!list.length) return '<div class="stagger"><section class="card" style="--i:0">' + head + '<div class="empty" style="padding:36px 24px"><span class="icon-tile">' + I.calendar + '</span><h2>No demos yet</h2><p>Book one and it is prepared, checked and held here.</p></div></section></div>';
+    return '<div class="stagger"><section class="card table-wrap" style="--i:0">' + head + demoTable(list, {}, false) + '</section></div>';
+  }
+
   // ---------- environment ----------
-  var TABS = [['deps', 'Dependencies'], ['seeds', 'Seed sets'], ['stale', 'Stale'], ['runs', 'Runs'], ['targets', 'Targets']];
+  var TABS = [['deps', 'Dependencies'], ['seeds', 'Seed sets'], ['stale', 'Stale'], ['runs', 'Runs'], ['demos', 'Demos'], ['targets', 'Targets']];
   function tabCounts(d) {
-    return { deps: d.deps, seeds: d.seeds.length, stale: d.stale ? d.stale.items.length : 0, runs: d.runs.length, targets: d.targets.length };
+    return { deps: d.deps, seeds: d.seeds.length, stale: d.stale ? d.stale.items.length : 0, runs: d.runs.length, demos: (d.demos || []).length, targets: d.targets.length };
   }
   function stat(i, label, value, hint, cls, count) {
     var v = count ? '<div class="value ' + (cls || '') + '" data-count="' + count.v + '" data-decimals="' + (count.d || 0) + '" data-suffix="' + esc(count.s || '') + '">' + count.v.toFixed(count.d || 0) + esc(count.s || '') + '</div>'
@@ -530,11 +909,12 @@
     return ring(d.readiness) +
       '<div class="titles"><h1>' + esc(d.title) + '</h1><p>' + esc(d.summary) + (d.lastProbe ? ' <span class="muted">(probed ' + ago(d.lastProbe) + ')</span>' : '') + '</p>' +
       (d.description ? '<p class="desc">' + esc(d.description) + '</p>' : '') + templateLine(d.template) + '</div>' +
-      '<div class="actions"><button class="btn" id="act-check"><span>Pre-call check</span></button>' +
+      '<div class="actions"><button class="btn ghost" id="act-book"><span>Book a demo</span></button><button class="btn" id="act-check"><span>Pre-call check</span></button>' +
       '<button class="btn primary shimmer" id="act-reset"' + (d.busy ? ' disabled' : '') + '><span>Reset to known good</span></button></div>';
   }
   function noticesHtml(d, name) {
     var html = '';
+    if (d.liveDemo) html += '<div class="alert info rise">' + I.info + '<div><b>Live demo until ' + esc(hm(d.liveDemo.end)) + ': ' + esc(d.liveDemo.title) + '</b><a href="#/demos/' + esc(d.liveDemo.id) + '" class="small">Resets and snapshots are refused until it ends; open the demo</a></div></div>';
     if (d.busy) html += '<div class="alert info rise">' + I.info + '<div><b>A run is in progress</b><a href="#/env/' + esc(name) + '/run/' + esc(d.busy) + '" class="mono small">' + esc(d.busy) + '</a></div></div>';
     if (d.problems && d.problems.length) html += '<div class="alert rise">' + I.alert + '<div><b>Configuration problems</b>' + d.problems.map(esc).join('<br>') + '</div></div>';
     return html;
@@ -618,6 +998,7 @@
       case 'seeds': html = seedsTab(d); break;
       case 'stale': html = staleTab(d, v.drift); break;
       case 'runs': html = runsTab(d); break;
+      case 'demos': html = demosTab(d); break;
       case 'targets': html = '<div id="targets-tab">' + targetsTab(d, v.targetStatus || null) + '</div>'; break;
       default: html = depsTab(d);
     }
@@ -757,6 +1138,8 @@
     });
     var reset = document.getElementById('act-reset');
     if (reset) reset.addEventListener('click', function () { resetDialog(envView.data, name); });
+    var bookBtn = document.getElementById('act-book');
+    if (bookBtn) bookBtn.addEventListener('click', function () { demoDialog('book', name); });
   }
   function wirePanel(name) {
     var panel = document.getElementById('panel');
@@ -781,18 +1164,22 @@
           title: '<h2>Take a new snapshot</h2>',
           body: '<p class="lead">The current state of <b style="color:var(--gr-text)">' + esc(dep) + '</b> becomes the known-good baseline the reset strategy restores. Postgres is cloned into a template database (open sessions are terminated); a Docker container is stopped briefly, committed, and its mounts archived.</p>' +
             '<div class="note">' + (view.kind === 'docker' ? 'target: commit + volume archive' : 'target: ' + esc((view.reset && view.reset.template) || (view.snapshot && view.snapshot.template) || 'template database')) +
-            '<div class="muted" style="margin-top:4px">previous: ' + (view.lastSnapshot ? esc(when(view.lastSnapshot.at)) + ' · ' + esc(view.lastSnapshot.ref) : 'none') + '</div></div>',
+            '<div class="muted" style="margin-top:4px">previous: ' + (view.lastSnapshot ? esc(when(view.lastSnapshot.at)) + ' · ' + esc(view.lastSnapshot.ref) : 'none') + '</div></div>' +
+            liveWarning(envView.data, 'snap-override'),
           footer: '<button class="btn ghost" data-close><span>Cancel</span></button><button class="btn primary" id="snap-go"><span>Snapshot now</span></button>'
         }, function (root, close) {
           root.querySelector('#snap-go').addEventListener('click', function () {
             busy(root.querySelector('#snap-go'), 'Starting');
-            api('/api/v1/environments/' + encodeURIComponent(name) + '/snapshot', { method: 'POST', body: { dependency: dep } })
+            var ov = root.querySelector('#snap-override');
+            api('/api/v1/environments/' + encodeURIComponent(name) + '/snapshot', { method: 'POST', body: { dependency: dep, override: !!(ov && ov.checked) } })
               .then(function (r) { close(); location.hash = '#/env/' + name + '/run/' + r.runId; })
               .catch(function (e) { toast('Snapshot failed', 'error', e.message); close(); });
           });
         });
       });
     });
+    var bookTab = document.getElementById('act-book-tab');
+    if (bookTab) bookTab.addEventListener('click', function () { demoDialog('book', name); });
     var stale = document.getElementById('act-stale');
     if (stale) stale.addEventListener('click', function () {
       busy(stale, 'Running drift queries');
@@ -816,6 +1203,14 @@
     });
   }
 
+  // liveWarning is the notice and override checkbox shown in the reset and
+  // snapshot dialogs while a booked demo is live on the environment.
+  function liveWarning(d, id) {
+    if (!d || !d.liveDemo) return '';
+    var l = d.liveDemo;
+    return '<div class="alert" style="margin-top:14px">' + I.alert + '<div><b>Live demo until ' + esc(hm(l.end)) + ': ' + esc(l.title) + '</b><span class="small">The server refuses this unless you override; the override is written to the demo journal.</span>' +
+      '<label class="check-row"><input type="checkbox" id="' + esc(id) + '"> Override the live demo</label></div></div>';
+  }
   function resetDialog(d, name, persona, version, brand) {
     var personas = {};
     d.seeds.forEach(function (s) { (personas[s.persona] = personas[s.persona] || []).push(s); });
@@ -836,7 +1231,8 @@
         '<div class="field"><label for="rs-version">Version</label><select id="rs-version">' + versions(pinnedPersona, version) + '</select></div></div>' +
         '<div class="field"><label for="rs-brand">Personalize for</label><select id="rs-brand"><option value="">House brand (no prospect)</option></select></div>' +
         '<label class="check-row"><input type="checkbox" id="rs-force"> Continue even if the preflight finds dependencies down</label>' +
-        '<label class="check-row"><input type="checkbox" id="rs-skip"> Skip reset strategies (apply seed steps only)</label>',
+        '<label class="check-row"><input type="checkbox" id="rs-skip"> Skip reset strategies (apply seed steps only)</label>' +
+        liveWarning(d, 'rs-override'),
       footer: '<button class="btn ghost" data-close><span>Cancel</span></button><button class="btn danger" id="rs-go"><span>Reset now</span></button>'
     }, function (root, close) {
       var ps = root.querySelector('#rs-persona'), vs = root.querySelector('#rs-version'), bs = root.querySelector('#rs-brand');
@@ -852,7 +1248,7 @@
       }).catch(function () {});
       root.querySelector('#rs-go').addEventListener('click', function () {
         busy(root.querySelector('#rs-go'), 'Starting');
-        api('/api/v1/environments/' + encodeURIComponent(name) + '/reset', { method: 'POST', body: { persona: ps.value, version: parseInt(vs.value, 10), force: root.querySelector('#rs-force').checked, skipReset: root.querySelector('#rs-skip').checked, brand: bs.value } })
+        api('/api/v1/environments/' + encodeURIComponent(name) + '/reset', { method: 'POST', body: { persona: ps.value, version: parseInt(vs.value, 10), force: root.querySelector('#rs-force').checked, skipReset: root.querySelector('#rs-skip').checked, brand: bs.value, override: !!(root.querySelector('#rs-override') || {}).checked } })
           .then(function (r) { close(); toast('Reset started', 'info', 'following the run'); location.hash = '#/env/' + name + '/run/' + r.runId; })
           .catch(function (e) { toast('Reset refused', 'error', e.message); close(); });
       });
@@ -935,9 +1331,10 @@
   function route() {
     var h = location.hash.replace(/^#\/?/, '');
     var parts = h.split('/').filter(Boolean).map(decodeURIComponent);
-    setNav(parts[0] === 'brands' ? 'brands' : 'envs');
+    setNav(parts[0] === 'brands' ? 'brands' : parts[0] === 'demos' ? 'demos' : 'envs');
     var go = function (fn) { try { fn(); } catch (e) { app.innerHTML = '<div class="alert">' + I.alert + '<div><b>Error</b>' + esc(e.message) + '</div></div>'; } };
     if (parts[0] === 'brands') return go(renderBrands);
+    if (parts[0] === 'demos') return go(parts[1] ? function () { renderDemo(parts[1]); } : renderDemos);
     if (parts[0] === 'env' && parts[1]) {
       if (parts[2] === 'run' && parts[3]) return go(function () { renderRun(parts[1], parts[3]); });
       return go(function () { renderEnv(parts[1], parts[2]); });

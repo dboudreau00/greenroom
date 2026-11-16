@@ -184,6 +184,7 @@ persona leaves the module out. A check without it runs for every seed set.
 | `GREENROOM_TOKEN` | Portal and API token. |
 | `GREENROOM_LISTEN` | Portal address. |
 | `GREENROOM_INSECURE=1` | Allow a non-loopback listen address without a token. |
+| `GREENROOM_USER` | Owner of demos booked or logged with the CLI (falls back to `USER`, then `USERNAME`). |
 | `DOCKER_HOST` | Default docker endpoint. |
 | `AWS_REGION`, `AWS_PROFILE`, `AWS_*` | Standard AWS settings. |
 | `KUBERNETES_SERVICE_HOST` | Present in a pod; enables in-cluster auth by default. |
