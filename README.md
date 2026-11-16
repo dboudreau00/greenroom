@@ -21,6 +21,46 @@
   <img src="docs/screenshots/environment.png" width="900" alt="An environment in the Greenroom portal: readiness, pinned and applied seed set, uptime, and the dependency table with sparklines">
 </p>
 
+## Tour
+
+Templates, personalization, demo bookings, debriefs and seed versioning, on seeded demo data.
+
+<p align="center">
+  <a href="docs/screenshots"><img src="docs/screenshots/tour.webp" width="900" alt="Greenroom tour: overview, templates, a personalized environment, brand kits, the demo tracker, a demo journal, a debrief, the gaps board, insights and a seed set comparison"></a>
+</p>
+
+<details>
+<summary>All screenshots</summary>
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/tour-overview.png" width="430" alt="Overview"><br>Overview: readiness, upcoming demos and debriefs waiting</td>
+    <td width="50%"><img src="docs/screenshots/tour-new-environment.png" width="430" alt="New environment dialog"><br>Templates: pick the product and the modules the demo shows</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/tour-environment.png" width="430" alt="Environment page"><br>An environment built from a template, personalized for a prospect</td>
+    <td><img src="docs/screenshots/tour-brands.png" width="430" alt="Brand kits"><br>Brand kits fetched from a prospect's link</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/tour-personalized-app.png" width="430" alt="Personalized demo app"><br>The demo app after a reset for Larkspur</td>
+    <td><img src="docs/screenshots/tour-demos.png" width="430" alt="Demo tracker"><br>Demo tracker: booked and past demos</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/tour-demo.png" width="430" alt="Demo page"><br>A demo with its journal</td>
+    <td><img src="docs/screenshots/tour-debrief.png" width="430" alt="Debrief form"><br>Debrief: what landed, what broke, the gaps raised</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/tour-gaps.png" width="430" alt="Gaps board"><br>Gaps board ranked by severity across prospects</td>
+    <td><img src="docs/screenshots/tour-insights.png" width="430" alt="Debrief insights"><br>Debrief insights</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/tour-seed-diff.png" width="430" alt="Seed set comparison"><br>Compare seed set versions</td>
+    <td></td>
+  </tr>
+</table>
+
+</details>
+
 ## The problem
 
 A demo environment is a shared stage. Between calls, someone runs a
