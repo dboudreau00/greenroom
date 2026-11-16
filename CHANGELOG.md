@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- `saas-web`: the demo page now takes the prospect's colors; the default
+  colors were declared after the brand stylesheet and always won.
+  Environments created earlier need `brand.css` linked after the inline
+  style in `web/index.html`.
+- Portal: the prospect is not repeated next to a brand kit of the same
+  name, and environment names and seed set chips stay on one line in demo
+  tables.
+
 ## 0.7.1
 
 Fixes to the 0.3.0 to 0.7.0 work.
