@@ -45,6 +45,16 @@ func demoFixture(t *testing.T) (*fixture, *fakeClock, time.Time) {
 	if err := f.eng.Brands().Save(&brand.Kit{Slug: "larkspur", Name: "Larkspur"}); err != nil {
 		t.Fatal(err)
 	}
+	// Runs the scheduler started (a cleanup reset at the end of a slot) may
+	// still be writing; let them finish before the temp dir is removed.
+	// Cleanups run last in, first out, so this runs before TempDir's.
+	t.Cleanup(func() {
+		v, _ := f.eng.Env("demo")
+		deadline := time.Now().Add(30 * time.Second)
+		for (len(f.eng.ActiveRuns("demo")) > 0 || (v != nil && f.eng.Busy(v) != "")) && time.Now().Before(deadline) {
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
 	return f, clk, t0
 }
 
