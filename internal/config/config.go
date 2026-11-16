@@ -60,6 +60,7 @@ type Workspace struct {
 	Listen          string   `json:"listen,omitempty"`
 	StateDir        string   `json:"stateDir,omitempty"`
 	EnvironmentsDir string   `json:"environmentsDir,omitempty"`
+	TemplatesDir    string   `json:"templatesDir,omitempty"`
 	ProbeInterval   Duration `json:"probeInterval,omitempty"`
 	SampleRetention Duration `json:"sampleRetention,omitempty"`
 	HealCooldown    Duration `json:"healCooldown,omitempty"`
@@ -80,6 +81,16 @@ type Pin struct {
 	Version int    `json:"version,omitempty"`
 }
 
+// TemplateRef records the template an environment was created from and the
+// product modules it was built with. It is informational: the environment
+// file is the source of truth once written.
+type TemplateRef struct {
+	Name        string   `json:"name"`
+	Version     int      `json:"version,omitempty"`
+	ProductType string   `json:"productType,omitempty"`
+	Modules     []string `json:"modules,omitempty"`
+}
+
 // Environment is one environments/<name>/environment.json file.
 type Environment struct {
 	Name         string            `json:"name"`
@@ -92,6 +103,8 @@ type Environment struct {
 	Dependencies []Dependency      `json:"dependencies"`
 	// Env holds extra environment variables made available to steps and DSNs.
 	Env map[string]string `json:"env,omitempty"`
+	// Template is set when the environment was created with greenroom new.
+	Template *TemplateRef `json:"template,omitempty"`
 
 	Dir  string `json:"-"`
 	Path string `json:"-"`
@@ -207,6 +220,23 @@ type DriftCheck struct {
 	Min       *float64 `json:"min,omitempty"`
 	Max       *float64 `json:"max,omitempty"`
 	Tolerance float64  `json:"tolerance,omitempty"`
+	// Personas limits the check to seed sets of these personas, for data
+	// that only some seed sets create. Empty means every seed set.
+	Personas []string `json:"personas,omitempty"`
+}
+
+// Applies reports whether the check is evaluated when persona's seed set is
+// the one applied. An empty persona (never reset) only runs unscoped checks.
+func (dc DriftCheck) Applies(persona string) bool {
+	if len(dc.Personas) == 0 {
+		return true
+	}
+	for _, p := range dc.Personas {
+		if p == persona {
+			return true
+		}
+	}
+	return false
 }
 
 // Dependency is one thing a demo needs to be up and correct.
@@ -334,11 +364,17 @@ func (ws *Workspace) applyDefaults() {
 	if ws.EnvironmentsDir == "" {
 		ws.EnvironmentsDir = "environments"
 	}
+	if ws.TemplatesDir == "" {
+		ws.TemplatesDir = "templates"
+	}
 	if !filepath.IsAbs(ws.StateDir) {
 		ws.StateDir = filepath.Join(ws.BaseDir, ws.StateDir)
 	}
 	if !filepath.IsAbs(ws.EnvironmentsDir) {
 		ws.EnvironmentsDir = filepath.Join(ws.BaseDir, ws.EnvironmentsDir)
+	}
+	if !filepath.IsAbs(ws.TemplatesDir) {
+		ws.TemplatesDir = filepath.Join(ws.BaseDir, ws.TemplatesDir)
 	}
 	if ws.ProbeInterval == 0 {
 		ws.ProbeInterval = Duration(DefaultProbeInterval)
@@ -533,6 +569,11 @@ func (e *Environment) Validate() error {
 			}
 			if dc.Name == "" {
 				fail("%s: drift[%d] needs a name", where, j)
+			}
+			for _, p := range dc.Personas {
+				if !ValidName(p) {
+					fail("%s: drift[%d]: persona %q is not a valid name", where, j, p)
+				}
 			}
 		}
 	}

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{title}}</title>
+<style>
+:root { --brand: #22c55e; }
+body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; display: grid; place-items: center; min-height: 100vh; margin: 0; }
+main { text-align: center; max-width: 640px; padding: 24px; }
+h1 { font-size: 40px; margin: 0 0 8px; }
+p { color: #94a3b8; }
+.modules { margin-top: 24px; color: var(--brand); font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+<h1>{{title}}</h1>
+<p>Static front end served by nginx. Greenroom probes this page before every call.</p>
+<p class="modules">{{modules}}</p>
+</main>
+</body>
+</html>

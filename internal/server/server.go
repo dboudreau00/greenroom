@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/dboudreau00/greenroom/internal/engine"
+	"github.com/dboudreau00/greenroom/internal/templates"
 	"github.com/dboudreau00/greenroom/internal/ui"
 )
 
@@ -71,6 +72,8 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/v1/me", s.auth(s.me))
 	m.HandleFunc("GET /api/v1/overview", s.auth(s.overview))
 	m.HandleFunc("POST /api/v1/reload", s.auth(s.reload))
+	m.HandleFunc("GET /api/v1/templates", s.auth(s.templates))
+	m.HandleFunc("POST /api/v1/environments", s.auth(s.createEnvironment))
 	m.HandleFunc("GET /api/v1/environments/{env}", s.auth(s.environment))
 	m.HandleFunc("POST /api/v1/environments/{env}/check", s.auth(s.check))
 	m.HandleFunc("GET /api/v1/environments/{env}/stale", s.auth(s.stale))
@@ -289,6 +292,51 @@ func (s *Server) reload(w http.ResponseWriter, r *http.Request) {
 		out["error"] = err.Error()
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) templates(w http.ResponseWriter, r *http.Request) {
+	list, err := s.eng.Templates()
+	if err != nil && list == nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := []templates.Info{}
+	for _, t := range list {
+		out = append(out, t.Describe())
+	}
+	resp := map[string]any{"templates": out, "templatesDir": s.eng.Workspace().TemplatesDir}
+	if err != nil {
+		resp["loadError"] = err.Error()
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) createEnvironment(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		templates.Request
+		Template string `json:"template"`
+		DryRun   bool   `json:"dryRun"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&body); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad json: "+err.Error())
+		return
+	}
+	plan, err := s.eng.CreateEnvironment(body.Template, body.Request, body.DryRun)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, engine.ErrExists) {
+			status = http.StatusConflict
+		}
+		jsonError(w, status, err.Error())
+		return
+	}
+	status := http.StatusCreated
+	if body.DryRun {
+		status = http.StatusOK
+	} else {
+		s.log.Info("environment created", "env", plan.Name, "template", plan.Template, "actor", actorOf(r))
+	}
+	writeJSON(w, status, map[string]any{"name": plan.Name, "plan": plan, "files": plan.Paths()})
 }
 
 func (s *Server) environment(w http.ResponseWriter, r *http.Request) {

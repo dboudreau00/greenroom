@@ -1,0 +1,114 @@
+{
+  // Analytics warehouse behind an EC2 bastion. Greenroom never connects to
+  // the database directly: seed SQL and drift queries run through psql on
+  // the bastion over SSM Run Command, and the bastion is started again
+  // automatically when it is found stopped.
+  "name": "warehouse-bastion",
+  "version": 1,
+  "title": "Analytics warehouse behind a bastion",
+  "productType": "Analytics warehouse",
+  "description": "Postgres warehouse reached through psql on an EC2 bastion over SSM, the BI app in front of it and its certificate. Each module is a data mart.",
+  "params": [
+    { "name": "region", "title": "AWS region", "default": "us-east-1", "pattern": "^[a-z]{2}(-[a-z]+)+-[0-9]$" },
+    { "name": "instanceId", "title": "Bastion instance id", "default": "i-0123456789abcdef0", "pattern": "^i-[0-9a-f]{8,17}$" },
+    { "name": "warehouseHost", "title": "Warehouse host as the bastion sees it", "default": "warehouse.internal", "pattern": "^[A-Za-z0-9.-]{1,253}$" },
+    { "name": "appUrl", "title": "BI app health URL", "default": "https://bi.demo.example.com/healthz", "pattern": "^https?://[A-Za-z0-9.:/_-]{1,300}$" },
+    { "name": "certAddress", "title": "Certificate to watch (host:port)", "default": "bi.demo.example.com:443", "pattern": "^[A-Za-z0-9.-]{1,253}:[0-9]{2,5}$" }
+  ],
+  "environment": {
+    "staleAfter": "72h",
+    "targets": {
+      "aws": { "kind": "aws", "region": "{{region}}" }
+    },
+    "dependencies": [
+      {
+        "name": "sql-bastion",
+        "title": "SQL bastion (EC2)",
+        "kind": "ec2",
+        "target": "aws",
+        "instanceId": "{{instanceId}}",
+        "critical": true,
+        "heal": { "action": "start" },
+        "autoHeal": true
+      },
+      {
+        "name": "warehouse",
+        "title": "Warehouse (Postgres via the bastion)",
+        "kind": "postgres",
+        "critical": true,
+        "via": { "target": "aws", "instanceId": "{{instanceId}}", "tool": "psql", "dsn": "postgres://demo@{{warehouseHost}}/warehouse" },
+        "reset": { "strategy": "schema" }
+      },
+      {
+        "name": "bi-app",
+        "title": "BI app",
+        "kind": "http",
+        "url": "{{appUrl}}",
+        "critical": true
+      },
+      {
+        "name": "bi-cert",
+        "title": "BI app certificate",
+        "kind": "tls",
+        "address": "{{certAddress}}",
+        "warnDays": 21
+      }
+    ]
+  },
+  "seed": {
+    "dependencies": ["warehouse"],
+    "steps": [
+      { "name": "calendar", "kind": "sql", "dependency": "warehouse", "file": "seed/001_calendar.sql" }
+    ],
+    "verify": [
+      { "name": "calendar-days", "kind": "sql", "dependency": "warehouse", "query": "SELECT count(*) FROM dim_date", "expect": 120 }
+    ]
+  },
+  "modules": [
+    {
+      "name": "sales",
+      "title": "Sales mart",
+      "description": "Customers, orders and the revenue by region view.",
+      "default": true,
+      "drift": { "warehouse": [ { "name": "orders", "query": "SELECT count(*) FROM fact_orders" } ] },
+      "steps": [
+        { "name": "sales-mart", "kind": "sql", "dependency": "warehouse", "file": "modules/sales/001_sales.sql" }
+      ],
+      "verify": [
+        { "name": "orders", "kind": "sql", "dependency": "warehouse", "query": "SELECT count(*) FROM fact_orders", "expect": 60 },
+        { "name": "regions", "kind": "sql", "dependency": "warehouse", "query": "SELECT count(*) FROM revenue_by_region", "expect": 4 }
+      ]
+    },
+    {
+      "name": "marketing",
+      "title": "Marketing mart",
+      "description": "Campaigns and touches with a cost per lead view.",
+      "drift": { "warehouse": [ { "name": "touches", "query": "SELECT count(*) FROM fact_touches" } ] },
+      "steps": [
+        { "name": "marketing-mart", "kind": "sql", "dependency": "warehouse", "file": "modules/marketing/001_marketing.sql" }
+      ],
+      "verify": [
+        { "name": "campaigns", "kind": "sql", "dependency": "warehouse", "query": "SELECT count(*) FROM dim_campaign", "expect": 5 },
+        { "name": "cost-per-lead", "kind": "sql", "dependency": "warehouse", "query": "SELECT count(*) FROM cost_per_lead", "expect": 5 }
+      ]
+    },
+    {
+      "name": "finance",
+      "title": "Finance mart",
+      "description": "General ledger entries and a trial balance that nets to zero.",
+      "drift": { "warehouse": [ { "name": "ledger", "query": "SELECT count(*) FROM fact_ledger" }, { "name": "balance", "query": "SELECT coalesce(sum(amount_cents), 0) FROM fact_ledger", "expect": 0 } ] },
+      "steps": [
+        { "name": "finance-mart", "kind": "sql", "dependency": "warehouse", "file": "modules/finance/001_finance.sql" }
+      ],
+      "verify": [
+        { "name": "ledger", "kind": "sql", "dependency": "warehouse", "query": "SELECT count(*) FROM fact_ledger", "expect": 24 },
+        { "name": "balanced", "kind": "sql", "dependency": "warehouse", "query": "SELECT sum(amount_cents) FROM fact_ledger", "expect": 0 }
+      ]
+    }
+  ],
+  "personas": [
+    { "name": "analyst", "title": "Analyst: every mart", "description": "Self-serve exploration across every mart this warehouse was built with.", "modules": ["*"] },
+    { "name": "cmo", "title": "CMO: pipeline and spend", "description": "Cost per lead next to the revenue it produced.", "vertical": "marketing", "modules": ["marketing", "sales"] },
+    { "name": "controller", "title": "Controller: close and revenue", "description": "Trial balance and revenue by region for the month-end close.", "vertical": "finance", "modules": ["finance", "sales"] }
+  ]
+}

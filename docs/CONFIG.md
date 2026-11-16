@@ -13,6 +13,7 @@ Sits at the workspace root. Every field is optional.
 | --- | --- | --- |
 | `listen` | `127.0.0.1:8470` | Portal address. `GREENROOM_LISTEN` overrides. |
 | `environmentsDir` | `environments` | Directory holding one sub-directory per environment. |
+| `templatesDir` | `templates` | Workspace templates; see [TEMPLATES.md](TEMPLATES.md). |
 | `stateDir` | `state` | Where applied records, samples, runs and snapshots are written. |
 | `probeInterval` | `60s` | How often the portal's scheduler probes every dependency. |
 | `sampleRetention` | `720h` | How long uptime samples are kept. |
@@ -30,6 +31,7 @@ Sits at the workspace root. Every field is optional.
 | `env` | Extra variables available to `${VAR}` expansion and exported to shell steps. |
 | `targets` | Named platform connections, see below. |
 | `dependencies` | Ordered list of things the demo needs, see below. |
+| `template` | Written by `greenroom new`: the template, its version, product type and the modules the environment was built with. Informational. |
 
 ### Targets
 
@@ -168,6 +170,10 @@ them is compared with the value recorded right after the last reset, so any
 demo that changes the number shows up as stale. `query` needs a postgres or
 mysql dependency; `command` runs through the dependency's target and reads
 the first line of output.
+
+`personas` limits a check to the seed sets of those personas, for data that
+only some seed sets create. Templates set it on module checks when a
+persona leaves the module out. A check without it runs for every seed set.
 
 ## Environment variables
 

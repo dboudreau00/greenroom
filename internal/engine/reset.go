@@ -198,6 +198,7 @@ func (e *Engine) runReset(ctx context.Context, v *Env, set *seeds.Set, opts Rese
 	}
 	e.store.AppendSamples(v.Config.Name, samples)
 	for _, dep := range v.Config.Dependencies {
+		dep = driftFor(dep, set.Persona)
 		if len(dep.Drift) == 0 {
 			continue
 		}
@@ -681,9 +682,10 @@ func (e *Engine) runVerify(ctx context.Context, v *Env, c seeds.Check, rec *reco
 		}
 		return fmtNum(val), nil
 	case "http":
-		dep := config.Dependency{Name: c.Name, Kind: config.KindHTTP, URL: c.URL, ExpectStatus: c.ExpectStatus, ExpectBody: c.ExpectBody}
+		u := v.expand(c.URL)
+		dep := config.Dependency{Name: c.Name, Kind: config.KindHTTP, URL: u, ExpectStatus: c.ExpectStatus, ExpectBody: c.ExpectBody}
 		r := v.Prober.Probe(ctx, dep)
-		rec.Info(step, "%s: %s", c.URL, r.Message)
+		rec.Info(step, "%s: %s", u, r.Message)
 		if !r.OK {
 			return "", errors.New(r.Message)
 		}
@@ -693,13 +695,28 @@ func (e *Engine) runVerify(ctx context.Context, v *Env, c seeds.Check, rec *reco
 		if err != nil {
 			return "", err
 		}
-		res, err := ex.Run(ctx, targets.RunSpec{Argv: c.Command}, rec.Sink(step))
+		argv := make([]string, len(c.Command))
+		for i, a := range c.Command {
+			argv[i] = v.expand(a)
+		}
+		res, err := ex.Run(ctx, targets.RunSpec{Argv: argv, Env: v.Config.Env}, rec.Sink(step))
 		if err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("exit %d", res.ExitCode), res.Error()
 	}
 	return "", fmt.Errorf("unknown verify kind %q", c.Kind)
+}
+
+// expand substitutes ${VAR} from the environment's env block, then the
+// process environment, as steps do.
+func (v *Env) expand(s string) string {
+	return config.Expand(s, func(k string) string {
+		if val, ok := v.Config.Env[k]; ok {
+			return val
+		}
+		return os.Getenv(k)
+	})
 }
 
 // databaseName returns the configured name or asks the server.

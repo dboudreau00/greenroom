@@ -66,6 +66,27 @@ an interval. Every dependency gets 24 hour and 7 day uptime, an incident
 list, and, when marked `autoHeal`, gets started, restarted or scaled back
 without anyone watching.
 
+## Start from a template
+
+Pick the product type and the modules the call is going to show; Greenroom
+writes the environment, a seed set per persona, the drift checks and the
+verify queries for exactly those modules.
+
+```bash
+greenroom templates
+greenroom new acme-crm --template saas-web --modules billing,support --persona cfo
+docker compose -f environments/acme-crm/docker-compose.yml up -d
+greenroom reset acme-crm
+```
+
+| Template | Product | Modules |
+| --- | --- | --- |
+| `saas-web` | SaaS web app on Docker Compose | accounts, billing, analytics, support, inventory |
+| `warehouse-bastion` | Analytics warehouse behind an EC2 bastion | sales, marketing and finance marts |
+| `k8s-microservices` | Commerce platform on Kubernetes or EKS | catalog, orders, payments, search |
+
+Add your own under `templates/`; see [docs/TEMPLATES.md](docs/TEMPLATES.md).
+
 ## Five minutes to green
 
 ```bash
@@ -177,6 +198,8 @@ decorative animation turns itself off under `prefers-reduced-motion`.
 | `greenroom reset <env> [persona@vN]` | Reset strategies, seed steps, verify, record | 0 ok, 1 failed |
 | `greenroom snapshot <env> <dep>` | Capture a Postgres template or a Docker commit with volumes | |
 | `greenroom heal <env> <dep>` | Run a dependency's heal action and re-probe | |
+| `greenroom new <env> --template t [--modules a,b]` | Create an environment from a template | |
+| `greenroom templates [name]` | Templates, their modules, personas and params | |
 | `greenroom seeds <env>`, `envs`, `targets`, `validate` | Listings and config checks | |
 | `greenroom serve` | Portal, API and the background prober | |
 | `greenroom init` | Scaffold a workspace with the bundled example | |
@@ -200,6 +223,7 @@ run logs.
 
 - [docs/CONFIG.md](docs/CONFIG.md): every field of the workspace, environment, target and dependency files
 - [docs/SEEDS.md](docs/SEEDS.md): the seed set format, step kinds, what a reset does, the stale rules
+- [docs/TEMPLATES.md](docs/TEMPLATES.md): environment templates, product modules, writing your own
 - [docs/DEPLOY.md](docs/DEPLOY.md): hosting, security model, upgrades
 - [docs/API.md](docs/API.md): the HTTP API and server-sent events
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how the packages fit together

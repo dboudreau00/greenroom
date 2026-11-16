@@ -47,6 +47,8 @@ Commands:
   seeds       list seed sets of an environment
   targets     check connectivity of an environment's targets
   validate    load every environment and seed set and report problems
+  templates   list the environment templates and their product modules
+  new         create an environment from a template with the modules to show
   init        scaffold a workspace with the bundled example environment
   version     print the version
 
@@ -112,6 +114,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return c.targets(cargs)
 	case "validate":
 		return c.validate(cargs)
+	case "templates":
+		return c.templates(cargs)
+	case "new":
+		return c.newEnv(cargs)
 	}
 	fmt.Fprintf(stderr, "unknown command %q\n\n%s", cmd, usage)
 	return 3
@@ -126,6 +132,17 @@ type cli struct {
 }
 
 func (c *cli) load(quiet bool) error {
+	if err := c.open(quiet); err != nil {
+		return err
+	}
+	if len(c.eng.Envs()) == 0 {
+		return fmt.Errorf("no environments found under %s (run greenroom init, or pass -C to the workspace directory)", c.ws.EnvironmentsDir)
+	}
+	return nil
+}
+
+// open loads the workspace and engine without requiring any environment.
+func (c *cli) open(quiet bool) error {
 	ws, err := config.LoadWorkspace(c.dir)
 	if err != nil {
 		return err
@@ -144,9 +161,6 @@ func (c *cli) load(quiet bool) error {
 	c.eng.Version = Version
 	if err := c.eng.Reload(); err != nil {
 		fmt.Fprintf(c.stderr, "warning: %v\n", err)
-	}
-	if len(c.eng.Envs()) == 0 {
-		return fmt.Errorf("no environments found under %s (run greenroom init, or pass -C to the workspace directory)", ws.EnvironmentsDir)
 	}
 	return nil
 }

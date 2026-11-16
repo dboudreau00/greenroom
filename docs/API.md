@@ -10,6 +10,8 @@ the portal session cookie. Responses are JSON. Errors are
 | GET | `/api/v1/me` | Actor and whether auth is on. |
 | GET | `/api/v1/overview` | Every environment's summary card. |
 | POST | `/api/v1/reload` | Re-read environment and seed files. |
+| GET | `/api/v1/templates` | Environment templates with their modules, personas and params. |
+| POST | `/api/v1/environments` | Create an environment from a template. Body `{"template":"saas-web","name":"acme-crm","title":"Acme CRM","modules":["billing"],"persona":"cfo","params":{"webPort":"8096"},"dryRun":false}`. 201 with the plan, 200 for a dry run, 409 when the name is taken. |
 | GET | `/api/v1/environments/{env}?drift=true` | Full detail: dependencies with uptime, seed sets, runs, snapshots, heals, stale report, targets. |
 | POST | `/api/v1/environments/{env}/check?record=true&drift=true` | Run the pre-call check now; returns the report. |
 | GET | `/api/v1/environments/{env}/stale?drift=true` | Stale report only. |

@@ -4,6 +4,7 @@
 cmd/greenroom            CLI and "serve"
 internal/config          workspace and environment schema, loading, validation, ${VAR} expansion
 internal/seeds           seed set discovery, manifest validation, content hashing
+internal/templates       built-in and workspace templates, module resolution, rendering
 internal/state           applied record, uptime samples, runs, snapshots, heal events (files)
 internal/targets         Executor / Copier / Pinger contracts and helpers
   docker/                Docker Engine API over unix, npipe or tcp, exec with hijacked stream

@@ -43,11 +43,12 @@ type Engine struct {
 	log   *slog.Logger
 	Now   func() time.Time
 
-	mu      sync.RWMutex
-	envs    map[string]*Env
-	loadErr error
-	latest  map[string]map[string]probe.Result
-	active  map[string]*recorder
+	mu       sync.RWMutex
+	createMu sync.Mutex
+	envs     map[string]*Env
+	loadErr  error
+	latest   map[string]map[string]probe.Result
+	active   map[string]*recorder
 	// Version is shown in the UI and the CLI.
 	Version string
 }

@@ -1,0 +1,173 @@
+{
+  // SaaS web app on Docker: Postgres, Redis and an nginx front end started
+  // from the docker-compose.yml this template writes next to the
+  // environment file. Every module adds its tables, sample data, drift
+  // checks and verify queries to the same database.
+  "name": "saas-web",
+  "version": 1,
+  "title": "SaaS web app on Docker",
+  "productType": "SaaS web app",
+  "description": "Postgres, Redis and a web front end under Docker Compose. Pick the product modules the call will show; each one adds its schema, sample data, drift checks and verify queries.",
+  "params": [
+    { "name": "dbPort", "title": "Postgres port on the host", "default": "5480", "pattern": "^[0-9]{2,5}$" },
+    { "name": "cachePort", "title": "Redis port on the host", "default": "6395", "pattern": "^[0-9]{2,5}$" },
+    { "name": "webPort", "title": "Web port on the host", "default": "8095", "pattern": "^[0-9]{2,5}$" }
+  ],
+  "environment": {
+    "staleAfter": "72h",
+    "env": {
+      "APP_PG_DSN": "postgres://demo:demo@127.0.0.1:{{dbPort}}/demo?sslmode=disable",
+      "APP_WEB_URL": "http://127.0.0.1:{{webPort}}/"
+    },
+    "targets": {
+      "docker": { "kind": "docker", "host": "${DOCKER_HOST:-unix:///var/run/docker.sock}" },
+      "local": { "kind": "local" }
+    },
+    "dependencies": [
+      {
+        "name": "postgres",
+        "title": "App database (Postgres 16)",
+        "kind": "postgres",
+        "dsn": "${APP_PG_DSN}",
+        "critical": true,
+        "reset": { "strategy": "schema" },
+        "snapshot": { "strategy": "template" },
+        "drift": [
+          { "name": "sessions", "query": "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()", "max": 25 }
+        ]
+      },
+      {
+        "name": "db-container",
+        "title": "Database container",
+        "kind": "docker",
+        "target": "docker",
+        "container": "{{envSlug}}-db",
+        "critical": true,
+        "heal": { "action": "start" },
+        "autoHeal": true
+      },
+      {
+        "name": "cache",
+        "title": "Redis cache",
+        "kind": "docker",
+        "target": "docker",
+        "container": "{{envSlug}}-cache",
+        "reset": { "strategy": "restart" },
+        "heal": { "action": "restart" },
+        "autoHeal": true
+      },
+      {
+        "name": "web",
+        "title": "Web front end",
+        "kind": "http",
+        "url": "${APP_WEB_URL}",
+        "expectStatus": 200,
+        "critical": true
+      },
+      {
+        "name": "web-container",
+        "title": "Web container",
+        "kind": "docker",
+        "target": "docker",
+        "container": "{{envSlug}}-web",
+        "heal": { "action": "restart" },
+        "autoHeal": true
+      }
+    ]
+  },
+  "seed": {
+    "dependencies": ["postgres", "cache"],
+    "after": [
+      { "name": "cache-flush", "kind": "command", "target": "docker", "container": "{{envSlug}}-cache", "command": ["redis-cli", "FLUSHALL"], "continueOnError": true },
+      { "name": "warm-web", "kind": "http", "url": "${APP_WEB_URL}", "expectStatus": 200, "continueOnError": true }
+    ],
+    "verify": [
+      { "name": "home", "kind": "http", "url": "${APP_WEB_URL}", "expectStatus": 200 }
+    ]
+  },
+  "modules": [
+    {
+      "name": "accounts",
+      "title": "Accounts",
+      "description": "Customer accounts and their users. Every other module hangs off it.",
+      "required": true,
+      "drift": { "postgres": [ { "name": "accounts", "query": "SELECT count(*) FROM accounts" } ] },
+      "steps": [
+        { "name": "accounts-schema", "kind": "sql", "dependency": "postgres", "file": "modules/accounts/001_schema.sql" },
+        { "name": "accounts-data", "kind": "sql", "dependency": "postgres", "file": "modules/accounts/002_data.sql" }
+      ],
+      "verify": [
+        { "name": "accounts", "kind": "sql", "dependency": "postgres", "query": "SELECT count(*) FROM accounts", "expect": 8 },
+        { "name": "users", "kind": "sql", "dependency": "postgres", "query": "SELECT count(*) FROM users", "expect": 14 }
+      ]
+    },
+    {
+      "name": "billing",
+      "title": "Billing",
+      "description": "Plans, subscriptions and invoices, with one overdue account for the dunning story.",
+      "default": true,
+      "requires": ["accounts"],
+      "drift": { "postgres": [ { "name": "invoices", "query": "SELECT count(*) FROM invoices" }, { "name": "open-invoices", "query": "SELECT count(*) FROM invoices WHERE status = 'open'" } ] },
+      "steps": [
+        { "name": "billing-schema", "kind": "sql", "dependency": "postgres", "file": "modules/billing/001_schema.sql" },
+        { "name": "billing-data", "kind": "sql", "dependency": "postgres", "file": "modules/billing/002_data.sql" }
+      ],
+      "verify": [
+        { "name": "subscriptions", "kind": "sql", "dependency": "postgres", "query": "SELECT count(*) FROM subscriptions", "expect": 8 },
+        { "name": "invoices", "kind": "sql", "dependency": "postgres", "query": "SELECT count(*) FROM invoices", "expect": 16 },
+        { "name": "mrr", "kind": "sql", "dependency": "postgres", "query": "SELECT sum(mrr_cents) FROM mrr_by_plan", "min": 1 }
+      ]
+    },
+    {
+      "name": "analytics",
+      "title": "Analytics",
+      "description": "Product usage events and the weekly active accounts view behind the dashboard.",
+      "default": true,
+      "requires": ["accounts"],
+      "drift": { "postgres": [ { "name": "events", "query": "SELECT count(*) FROM events" } ] },
+      "steps": [
+        { "name": "analytics-schema", "kind": "sql", "dependency": "postgres", "file": "modules/analytics/001_schema.sql" },
+        { "name": "analytics-data", "kind": "sql", "dependency": "postgres", "file": "modules/analytics/002_data.sql" }
+      ],
+      "verify": [
+        { "name": "events", "kind": "sql", "dependency": "postgres", "query": "SELECT count(*) FROM events", "expect": 40 },
+        { "name": "weekly-active", "kind": "sql", "dependency": "postgres", "query": "SELECT count(*) FROM weekly_active_accounts", "min": 1 }
+      ]
+    },
+    {
+      "name": "support",
+      "title": "Support desk",
+      "description": "Tickets with priorities and an SLA breach to walk through.",
+      "requires": ["accounts"],
+      "drift": { "postgres": [ { "name": "tickets", "query": "SELECT count(*) FROM tickets" }, { "name": "open-tickets", "query": "SELECT count(*) FROM tickets WHERE status <> 'solved'" } ] },
+      "steps": [
+        { "name": "support-schema", "kind": "sql", "dependency": "postgres", "file": "modules/support/001_schema.sql" },
+        { "name": "support-data", "kind": "sql", "dependency": "postgres", "file": "modules/support/002_data.sql" }
+      ],
+      "verify": [
+        { "name": "tickets", "kind": "sql", "dependency": "postgres", "query": "SELECT count(*) FROM tickets", "expect": 10 },
+        { "name": "sla-breaches", "kind": "sql", "dependency": "postgres", "query": "SELECT count(*) FROM ticket_backlog WHERE sla_breached", "expect": 1 }
+      ]
+    },
+    {
+      "name": "inventory",
+      "title": "Inventory",
+      "description": "Products, two warehouses and stock levels with one item below its reorder point.",
+      "drift": { "postgres": [ { "name": "stock-units", "query": "SELECT sum(units) FROM stock" } ] },
+      "steps": [
+        { "name": "inventory-schema", "kind": "sql", "dependency": "postgres", "file": "modules/inventory/001_schema.sql" },
+        { "name": "inventory-data", "kind": "sql", "dependency": "postgres", "file": "modules/inventory/002_data.sql" }
+      ],
+      "verify": [
+        { "name": "products", "kind": "sql", "dependency": "postgres", "query": "SELECT count(*) FROM products", "expect": 10 },
+        { "name": "reorder", "kind": "sql", "dependency": "postgres", "query": "SELECT count(*) FROM reorder_list", "expect": 1 }
+      ]
+    }
+  ],
+  "personas": [
+    { "name": "overview", "title": "Product overview: every selected module", "description": "One walkthrough across everything this environment was built with.", "modules": ["*"] },
+    { "name": "cfo", "title": "CFO: revenue and collections", "description": "MRR by plan, the overdue invoice, usage that backs the expansion story.", "vertical": "finance", "modules": ["billing", "analytics"] },
+    { "name": "support-lead", "title": "Support lead: backlog and SLAs", "description": "Ticket backlog by priority with one SLA breach.", "modules": ["support", "analytics"] },
+    { "name": "ops", "title": "Operations: stock and reorders", "description": "Stock across two warehouses and the reorder list.", "vertical": "retail", "modules": ["inventory"] }
+  ]
+}

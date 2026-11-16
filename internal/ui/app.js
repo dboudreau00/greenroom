@@ -203,14 +203,17 @@
       return api('/api/v1/overview').then(function (data) {
         var envs = data.environments || [];
         var html = '<div class="spotlight"></div><div class="page' + (first ? '' : ' static') + '">' +
-          '<header class="page-head rise"><div><h1>Demo environments</h1><div class="sub">' + envs.length + ' environment' + (envs.length === 1 ? '' : 's') + ' in <span class="mono dim">' + esc(data.environmentsDir) + '</span>, probed every <span class="mono dim">' + esc(data.probeInterval) + '</span></div></div></header>';
+          '<header class="page-head rise"><div><h1>Demo environments</h1><div class="sub">' + envs.length + ' environment' + (envs.length === 1 ? '' : 's') + ' in <span class="mono dim">' + esc(data.environmentsDir) + '</span>, probed every <span class="mono dim">' + esc(data.probeInterval) + '</span></div></div>' +
+          '<div class="actions"><button class="btn primary" id="act-new"><span>New environment</span></button></div></header>';
         if (data.loadError) html += '<div class="alert rise">' + I.alert + '<div><b>Some environments failed to load</b><span class="small dim mono">' + esc(data.loadError) + '</span></div></div>';
         if (!envs.length) {
-          html += '<div class="card empty rise" style="margin-top:24px"><span class="icon-tile">' + I.folder + '</span><h2>No environments yet</h2><p>Create <span class="mono dim">environments/&lt;name&gt;/environment.json</span> or run <span class="mono dim">greenroom init</span>.</p></div>';
+          html += '<div class="card empty rise" style="margin-top:24px"><span class="icon-tile">' + I.folder + '</span><h2>No environments yet</h2><p>Start from a template with the product modules you want to show, or run <span class="mono dim">greenroom init</span> for the bundled example.</p></div>';
         } else {
           html += '<div class="grid stagger">' + envs.map(envCard).join('') + '</div>';
         }
         app.innerHTML = html + '</div>';
+        var nb = document.getElementById('act-new');
+        if (nb) nb.addEventListener('click', newEnvDialog);
         first = false;
       });
     };
@@ -231,7 +234,124 @@
       '<div><dt>Stale</dt><dd style="color:' + (e.stale ? 'var(--gr-amber)' : 'var(--gr-green)') + '">' + (e.stale ? e.stale + ' item' + (e.stale === 1 ? '' : 's') : 'fresh') + '</dd></div>' +
       '<div><dt>Uptime 24h</dt><dd>' + (e.lastProbe ? '<b class="num">' + pct(e.uptime24h) + '</b>' : '<span class="muted">no samples</span>') + '</dd></div>' +
       '<div><dt>Owner</dt><dd>' + esc(e.owner || '') + '</dd></div>' +
-      '</dl></a>';
+      '</dl>' + templateLine(e.template) + '</a>';
+  }
+
+  function templateLine(t) {
+    if (!t || !t.name) return '';
+    return '<div class="tpl-line"><span class="muted">' + esc(t.productType || t.name) + '</span>' + (t.modules || []).map(function (m) { return chip('green', m); }).join('') + '</div>';
+  }
+
+  // ---------- new environment from a template ----------
+  function slug(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 63); }
+  function tplModule(t, name) { return t.modules.filter(function (m) { return m.name === name; })[0]; }
+  function resolveModules(t, picked) {
+    var want = {};
+    t.modules.forEach(function (m) { if (m.required || picked[m.name]) want[m.name] = true; });
+    for (var changed = true; changed;) {
+      changed = false;
+      Object.keys(want).forEach(function (n) {
+        (tplModule(t, n).requires || []).forEach(function (r) { if (!want[r]) { want[r] = true; changed = true; } });
+      });
+    }
+    return t.modules.filter(function (m) { return want[m.name]; }).map(function (m) { return m.name; });
+  }
+  function personasFor(t, mods) {
+    return t.personas.filter(function (p) { return p.modules.indexOf('*') >= 0 || p.modules.some(function (m) { return mods.indexOf(m) >= 0; }); });
+  }
+  // dropModule removes a module and, transitively, every picked module that needs it.
+  function dropModule(t, picked, name) {
+    delete picked[name];
+    Object.keys(picked).forEach(function (k) {
+      if (picked[k] && (tplModule(t, k).requires || []).indexOf(name) >= 0) dropModule(t, picked, k);
+    });
+  }
+  function newEnvDialog() {
+    api('/api/v1/templates').then(function (data) {
+      var list = (data.templates || []).filter(function (t) { return !t.problems.length; });
+      if (!list.length) { toast('No usable templates', 'error', data.loadError || 'none found'); return; }
+      var defaults = function (t) { var p = {}; t.modules.forEach(function (m) { if (m.default) p[m.name] = true; }); return p; };
+      var st = { t: list[0], picked: defaults(list[0]), nameEdited: false };
+      var cards = list.map(function (t, i) {
+        return '<button type="button" class="tpl-card" role="radio" data-tpl="' + i + '"><span class="badge blue">' + esc(t.productType || 'template') + '</span><b>' + esc(t.title) + '</b><span class="small muted">' + esc(t.description || '') + '</span>' +
+          '<span class="xs muted">' + t.modules.length + ' modules, ' + t.personas.length + ' personas' + (t.source === 'workspace' ? ', from the workspace' : '') + '</span></button>';
+      }).join('');
+      modal({
+        width: 780,
+        title: '<h2>New environment</h2>',
+        body: '<p class="lead">Pick the product, then the modules this demo will show. Greenroom writes the environment file, one seed set per persona and whatever the template runs next to it.</p>' +
+          '<div class="tpl-grid" role="radiogroup" aria-label="Template">' + cards + '</div>' +
+          '<div id="ne-detail"></div><div id="ne-error"></div>',
+        footer: '<span class="small muted foot-note" id="ne-summary"></span><button class="btn ghost" data-close><span>Cancel</span></button><button class="btn primary" id="ne-go"><span>Create environment</span></button>'
+      }, function (root, close) {
+        var detail = root.querySelector('#ne-detail');
+        var drawModules = function () {
+          var t = st.t, mods = resolveModules(t, st.picked);
+          var pers = personasFor(t, mods);
+          var deps = t.baseDependencies + mods.reduce(function (n, m) { return n + tplModule(t, m).dependencies.length; }, 0);
+          root.querySelector('#ne-summary').textContent = deps + ' dependencies, ' + pers.length + ' seed set' + (pers.length === 1 ? '' : 's');
+          root.querySelector('#ne-modules').innerHTML = t.modules.map(function (m) {
+            var on = mods.indexOf(m.name) >= 0;
+            var why = m.required ? 'always included' : m.requires.length ? 'needs ' + m.requires.join(', ') : '';
+            return '<label class="check-row module-row"><input type="checkbox" data-mod="' + esc(m.name) + '"' + (on ? ' checked' : '') + (m.required ? ' disabled' : '') + '>' +
+              '<span><b>' + esc(m.title) + '</b>' + (why ? ' <span class="xs muted">' + esc(why) + '</span>' : '') + '<span class="small muted block">' + esc(m.description || '') + '</span></span></label>';
+          }).join('');
+          var sel = root.querySelector('#ne-persona'), cur = sel.value;
+          sel.innerHTML = pers.map(function (p) { return '<option value="' + esc(p.name) + '"' + (p.name === cur ? ' selected' : '') + '>' + esc(p.title || p.name) + '</option>'; }).join('');
+          Array.prototype.forEach.call(root.querySelectorAll('[data-mod]'), function (cb) {
+            cb.addEventListener('change', function () {
+              var n = cb.getAttribute('data-mod');
+              if (cb.checked) st.picked[n] = true; else dropModule(st.t, st.picked, n);
+              drawModules();
+            });
+          });
+        };
+        var drawDetail = function () {
+          var t = st.t;
+          Array.prototype.forEach.call(root.querySelectorAll('.tpl-card'), function (c) {
+            var on = list[+c.getAttribute('data-tpl')] === t;
+            c.classList.toggle('selected', on);
+            c.setAttribute('aria-checked', on ? 'true' : 'false');
+          });
+          var val = function (id) { var el = root.querySelector(id); return el ? el.value : ''; };
+          var keep = { name: val('#ne-name'), title: val('#ne-title'), owner: val('#ne-owner') };
+          detail.innerHTML = '<div class="fields" style="margin-top:6px"><div class="field"><label for="ne-title">Title</label><input type="text" id="ne-title" maxlength="80" placeholder="Prospect demo" value="' + esc(keep.title) + '"></div>' +
+            '<div class="field"><label for="ne-name">Name</label><input type="text" id="ne-name" maxlength="63" class="mono" placeholder="prospect-demo" value="' + esc(keep.name) + '"></div></div>' +
+            '<div class="fields"><div class="field"><label for="ne-persona">Pinned persona</label><select id="ne-persona"></select></div>' +
+            '<div class="field"><label for="ne-owner">Owner</label><input type="text" id="ne-owner" maxlength="80" placeholder="sales-engineering" value="' + esc(keep.owner) + '"></div></div>' +
+            '<h4 style="margin-top:18px">Modules</h4><div id="ne-modules" class="module-list"></div>' +
+            (t.params.length ? '<details class="params"><summary>Template settings <span class="muted">(' + t.params.length + ')</span></summary><div class="fields">' + t.params.map(function (p) {
+              return '<div class="field"><label for="ne-p-' + esc(p.name) + '">' + esc(p.title || p.name) + '</label><input type="text" class="mono" id="ne-p-' + esc(p.name) + '" data-param="' + esc(p.name) + '" value="' + esc(p.default || '') + '"></div>';
+            }).join('') + '</div></details>' : '');
+          var ti = root.querySelector('#ne-title'), ni = root.querySelector('#ne-name');
+          ti.addEventListener('input', function () { if (!st.nameEdited) ni.value = slug(ti.value); });
+          ni.addEventListener('input', function () { st.nameEdited = ni.value !== ''; });
+          drawModules();
+        };
+        Array.prototype.forEach.call(root.querySelectorAll('.tpl-card'), function (c) {
+          c.addEventListener('click', function () { st.t = list[+c.getAttribute('data-tpl')]; st.picked = defaults(st.t); drawDetail(); });
+        });
+        drawDetail();
+        root.querySelector('#ne-go').addEventListener('click', function () {
+          var go = root.querySelector('#ne-go'), errEl = root.querySelector('#ne-error');
+          var params = {};
+          Array.prototype.forEach.call(root.querySelectorAll('[data-param]'), function (i) { params[i.getAttribute('data-param')] = i.value.trim(); });
+          var name = root.querySelector('#ne-name').value.trim() || slug(root.querySelector('#ne-title').value);
+          var body = { template: st.t.name, name: name, title: root.querySelector('#ne-title').value.trim(), owner: root.querySelector('#ne-owner').value.trim(),
+            modules: resolveModules(st.t, st.picked), persona: root.querySelector('#ne-persona').value, params: params };
+          errEl.innerHTML = '';
+          busy(go, 'Creating');
+          api('/api/v1/environments', { method: 'POST', body: body }).then(function (r) {
+            close();
+            toast('Environment created', 'ok', r.name + ': ' + r.plan.personas.length + ' seed sets, ' + r.plan.dependencies + ' dependencies');
+            location.hash = '#/env/' + r.name;
+          }).catch(function (e) {
+            errEl.innerHTML = '<div class="alert">' + I.alert + '<div><b>Not created</b>' + esc(e.message) + '</div></div>';
+            go.disabled = false; go.innerHTML = '<span>Create environment</span>';
+          });
+        });
+      });
+    }).catch(function (e) { toast('Could not load templates', 'error', e.message); });
   }
 
   // ---------- environment ----------
@@ -255,7 +375,7 @@
   function headHtml(d) {
     return ring(d.readiness) +
       '<div class="titles"><h1>' + esc(d.title) + '</h1><p>' + esc(d.summary) + (d.lastProbe ? ' <span class="muted">(probed ' + ago(d.lastProbe) + ')</span>' : '') + '</p>' +
-      (d.description ? '<p class="desc">' + esc(d.description) + '</p>' : '') + '</div>' +
+      (d.description ? '<p class="desc">' + esc(d.description) + '</p>' : '') + templateLine(d.template) + '</div>' +
       '<div class="actions"><button class="btn" id="act-check"><span>Pre-call check</span></button>' +
       '<button class="btn primary shimmer" id="act-reset"' + (d.busy ? ' disabled' : '') + '><span>Reset to known good</span></button></div>';
   }

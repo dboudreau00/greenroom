@@ -88,3 +88,43 @@ func TestCLIFlow(t *testing.T) {
 		t.Fatalf("empty workspace: %d %s", code, errb.String())
 	}
 }
+
+func TestTemplatesAndNew(t *testing.T) {
+	dir := t.TempDir()
+	var out, errb bytes.Buffer
+	if code := run([]string{"-C", dir, "templates"}, &out, &errb); code != 0 || !strings.Contains(out.String(), "saas-web") || !strings.Contains(out.String(), "k8s-microservices") {
+		t.Fatalf("templates: %d %s %s", code, out.String(), errb.String())
+	}
+	out.Reset()
+	if code := run([]string{"-C", dir, "templates", "warehouse-bastion"}, &out, &errb); code != 0 || !strings.Contains(out.String(), "instanceId") {
+		t.Fatalf("templates detail: %d %s", code, out.String())
+	}
+	out.Reset()
+	code := run([]string{"-C", dir, "new", "crm-demo", "--template", "saas-web", "--modules", "billing,support", "--persona", "cfo", "--set", "webPort=8123", "--title", "CRM demo"}, &out, &errb)
+	if code != 0 || !strings.Contains(out.String(), "created crm-demo") || !strings.Contains(out.String(), "pinned to cfo@v1") {
+		t.Fatalf("new: %d %s %s", code, out.String(), errb.String())
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "environments", "crm-demo", "docker-compose.yml"))
+	if err != nil || !strings.Contains(string(b), "8123:80") {
+		t.Fatalf("compose: %v %s", err, b)
+	}
+	out.Reset()
+	if code := run([]string{"-C", dir, "validate"}, &out, &errb); code != 0 || !strings.Contains(out.String(), "crm-demo: 5 dependencies") {
+		t.Fatalf("validate after new: %d %s", code, out.String())
+	}
+	errb.Reset()
+	if code := run([]string{"-C", dir, "new", "crm-demo", "--template", "saas-web"}, io.Discard, &errb); code != 3 || !strings.Contains(errb.String(), "already exists") {
+		t.Fatalf("second new: %d %s", code, errb.String())
+	}
+	errb.Reset()
+	if code := run([]string{"-C", dir, "new", "x", "--template", "saas-web", "--set", "webPort=80;id"}, io.Discard, &errb); code != 3 || !strings.Contains(errb.String(), "does not match") {
+		t.Fatalf("bad param: %d %s", code, errb.String())
+	}
+	out.Reset()
+	if code := run([]string{"-C", dir, "new", "dry", "--template", "k8s-microservices", "--modules", "payments", "--dry-run"}, &out, &errb); code != 0 || !strings.Contains(out.String(), "catalog, orders, payments") {
+		t.Fatalf("dry run: %d %s", code, out.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "environments", "dry")); err == nil {
+		t.Fatal("dry run wrote files")
+	}
+}

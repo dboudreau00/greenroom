@@ -306,7 +306,12 @@ func (e *Engine) StaleReport(ctx context.Context, v *Env, results []probe.Result
 	}
 
 	if drift {
+		persona := ""
+		if applied != nil {
+			persona = applied.Persona
+		}
 		for _, dep := range v.Config.Dependencies {
+			dep = driftFor(dep, persona)
 			if len(dep.Drift) == 0 {
 				continue
 			}
@@ -372,6 +377,19 @@ func sevRank(s string) int {
 		return 1
 	}
 	return 2
+}
+
+// driftFor returns the dependency with only the drift checks that apply to
+// the given persona's seed set.
+func driftFor(dep config.Dependency, persona string) config.Dependency {
+	var kept []config.DriftCheck
+	for _, dc := range dep.Drift {
+		if dc.Applies(persona) {
+			kept = append(kept, dc)
+		}
+	}
+	dep.Drift = kept
+	return dep
 }
 
 // driftValues evaluates every drift check of a dependency.

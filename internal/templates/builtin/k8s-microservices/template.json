@@ -1,0 +1,138 @@
+{
+  // Microservices on Kubernetes or EKS. Every module is a service: it adds
+  // its deployment as a dependency (rolled back to ready by auto-heal) and
+  // its tables in the shared Postgres statefulset, seeded through pod exec.
+  "name": "k8s-microservices",
+  "version": 1,
+  "title": "Microservices on Kubernetes",
+  "productType": "Commerce platform",
+  "description": "A gateway, one deployment per module and a Postgres statefulset seeded through pod exec. Works the same on kind, EKS or any cluster kubectl can reach.",
+  "params": [
+    { "name": "context", "title": "kubectl context", "default": "demo", "pattern": "^[A-Za-z0-9._:/@-]{1,200}$" },
+    { "name": "namespace", "title": "Namespace", "default": "demo", "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" },
+    { "name": "storefrontUrl", "title": "Storefront health URL", "default": "https://shop.demo.example.com/healthz", "pattern": "^https?://[A-Za-z0-9.:/_-]{1,300}$" }
+  ],
+  "environment": {
+    "staleAfter": "72h",
+    "targets": {
+      "kube": { "kind": "kubernetes", "kubeconfig": "auto", "context": "{{context}}", "namespace": "{{namespace}}" }
+    },
+    "dependencies": [
+      {
+        "name": "gateway",
+        "title": "API gateway",
+        "kind": "kubernetes",
+        "target": "kube",
+        "resource": "deployment/gateway",
+        "critical": true,
+        "heal": { "action": "rollout-restart" },
+        "autoHeal": true
+      },
+      {
+        "name": "postgres",
+        "title": "Postgres statefulset",
+        "kind": "kubernetes",
+        "target": "kube",
+        "resource": "statefulset/postgres",
+        "critical": true,
+        "heal": { "action": "scale", "replicas": 1 },
+        "autoHeal": true
+      },
+      {
+        "name": "db",
+        "title": "Platform database",
+        "kind": "postgres",
+        "critical": true,
+        "via": { "target": "kube", "pod": "statefulset/postgres", "tool": "psql" },
+        "reset": { "strategy": "schema" }
+      },
+      {
+        "name": "storefront",
+        "title": "Storefront",
+        "kind": "http",
+        "url": "{{storefrontUrl}}",
+        "critical": true
+      }
+    ]
+  },
+  "seed": {
+    "dependencies": ["db"],
+    "after": [
+      { "name": "gateway-ready", "kind": "wait", "dependency": "gateway", "timeout": "3m" }
+    ]
+  },
+  "modules": [
+    {
+      "name": "catalog",
+      "title": "Catalog",
+      "description": "Products and categories behind the storefront.",
+      "required": true,
+      "dependencies": [
+        { "name": "catalog", "title": "Catalog service", "kind": "kubernetes", "target": "kube", "resource": "deployment/catalog", "critical": true, "heal": { "action": "rollout-restart" }, "autoHeal": true }
+      ],
+      "drift": { "db": [ { "name": "products", "query": "SELECT count(*) FROM products" } ] },
+      "steps": [
+        { "name": "catalog-data", "kind": "sql", "dependency": "db", "file": "modules/catalog/001_catalog.sql" }
+      ],
+      "verify": [
+        { "name": "products", "kind": "sql", "dependency": "db", "query": "SELECT count(*) FROM products", "expect": 12 }
+      ]
+    },
+    {
+      "name": "orders",
+      "title": "Orders",
+      "description": "Carts and orders, including one stuck in fulfilment.",
+      "default": true,
+      "requires": ["catalog"],
+      "dependencies": [
+        { "name": "orders", "title": "Orders service", "kind": "kubernetes", "target": "kube", "resource": "deployment/orders", "critical": true, "heal": { "action": "rollout-restart" }, "autoHeal": true }
+      ],
+      "drift": { "db": [ { "name": "orders", "query": "SELECT count(*) FROM orders" } ] },
+      "steps": [
+        { "name": "orders-data", "kind": "sql", "dependency": "db", "file": "modules/orders/001_orders.sql" }
+      ],
+      "verify": [
+        { "name": "orders", "kind": "sql", "dependency": "db", "query": "SELECT count(*) FROM orders", "expect": 20 },
+        { "name": "stuck", "kind": "sql", "dependency": "db", "query": "SELECT count(*) FROM orders WHERE status = 'fulfilling' AND placed_at < now() - interval '2 days'", "expect": 1 }
+      ]
+    },
+    {
+      "name": "payments",
+      "title": "Payments",
+      "description": "Payment intents with a declined card and a refund.",
+      "requires": ["orders"],
+      "dependencies": [
+        { "name": "payments", "title": "Payments service", "kind": "kubernetes", "target": "kube", "resource": "deployment/payments", "critical": true, "heal": { "action": "rollout-restart" }, "autoHeal": true }
+      ],
+      "drift": { "db": [ { "name": "payments", "query": "SELECT count(*) FROM payments" } ] },
+      "steps": [
+        { "name": "payments-data", "kind": "sql", "dependency": "db", "file": "modules/payments/001_payments.sql" }
+      ],
+      "verify": [
+        { "name": "payments", "kind": "sql", "dependency": "db", "query": "SELECT count(*) FROM payments", "expect": 20 },
+        { "name": "declined", "kind": "sql", "dependency": "db", "query": "SELECT count(*) FROM payments WHERE status = 'declined'", "expect": 1 }
+      ]
+    },
+    {
+      "name": "search",
+      "title": "Search",
+      "description": "Search service with synonyms and boosted products.",
+      "requires": ["catalog"],
+      "dependencies": [
+        { "name": "search", "title": "Search service", "kind": "kubernetes", "target": "kube", "resource": "deployment/search", "heal": { "action": "rollout-restart" }, "autoHeal": true }
+      ],
+      "steps": [
+        { "name": "search-data", "kind": "sql", "dependency": "db", "file": "modules/search/001_search.sql" },
+        { "name": "search-restart", "kind": "command", "target": "kube", "pod": "deployment/search", "command": ["sh", "-c", "kill -HUP 1 || true"], "continueOnError": true }
+      ],
+      "verify": [
+        { "name": "synonyms", "kind": "sql", "dependency": "db", "query": "SELECT count(*) FROM search_synonyms", "expect": 6 }
+      ]
+    }
+  ],
+  "personas": [
+    { "name": "platform", "title": "Platform tour: every service", "description": "The whole platform as deployed, service by service.", "modules": ["*"] },
+    { "name": "commerce", "title": "Commerce: browse to paid", "description": "From catalog to a paid order, including the declined card.", "vertical": "retail", "modules": ["catalog", "orders", "payments"] },
+    { "name": "merchandising", "title": "Merchandising: catalog and search", "description": "Catalog curation and search tuning.", "vertical": "retail", "modules": ["catalog", "search"] }
+  ]
+}

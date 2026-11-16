@@ -71,7 +71,9 @@ resource such as `deployment/db`), `instanceId` (aws through SSM). With no
 
 `${VAR}` is expanded in `url`, `headers`, `command`, `body`, `dest` and
 `env` values from the step's `env`, then the environment's `env`, then the
-process environment. File contents are used verbatim.
+process environment. Verify checks expand `url` and `command` the same way,
+from the environment's `env` and the process environment. File contents are
+used verbatim.
 
 ## Verify
 

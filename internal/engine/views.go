@@ -32,6 +32,8 @@ type EnvSummary struct {
 	Personas    []string       `json:"personas"`
 	StaleAfter  string         `json:"staleAfter"`
 	Problems    []string       `json:"problems,omitempty"`
+	// Template is the template and modules the environment was built from.
+	Template *config.TemplateRef `json:"template,omitempty"`
 }
 
 // DepView is one dependency with its live state.
@@ -117,7 +119,8 @@ func (e *Engine) Summary(ctx context.Context, v *Env) EnvSummary {
 	}
 	s := EnvSummary{Name: v.Config.Name, Title: v.Config.DisplayTitle(), Owner: v.Config.Owner, Description: v.Config.Description,
 		Readiness: readiness, Summary: summary, Deps: len(v.Config.Dependencies), LastProbe: last, Busy: e.Busy(v),
-		SeedSets: len(v.Seeds), Personas: seeds.Personas(v.Seeds), StaleAfter: humanDuration(v.Config.StaleAfter.Or(config.DefaultStaleAfter))}
+		SeedSets: len(v.Seeds), Personas: seeds.Personas(v.Seeds), StaleAfter: humanDuration(v.Config.StaleAfter.Or(config.DefaultStaleAfter)),
+		Template: v.Config.Template}
 	if s.Personas == nil {
 		s.Personas = []string{}
 	}
