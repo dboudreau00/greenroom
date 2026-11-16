@@ -1640,14 +1640,18 @@
       (personas[s.persona] = personas[s.persona] || []).push(s);
     });
     return '<div class="stagger">' + Object.keys(personas).map(function (p, gi) {
-      var sets = personas[p];
-      return '<section class="persona" style="--i:' + gi + '"><div class="persona-head"><h2>Persona: <span class="mono">' + esc(p) + '</span></h2><span class="small muted num">' + sets.length + ' version' + (sets.length === 1 ? '' : 's') + '</span></div>' +
+      var sets = personas[p], prev = {};
+      sets.forEach(function (s, k) { if (k > 0) prev[s.id] = sets[k - 1]; });
+      return '<section class="persona" style="--i:' + gi + '"><div class="persona-head"><h2>Persona: <span class="mono">' + esc(p) + '</span></h2><span class="small muted num">' + sets.length + ' version' + (sets.length === 1 ? '' : 's') + '</span>' +
+        '<button class="btn small ghost" data-bump="' + esc(p) + '"><span>New version</span></button></div>' +
         sets.slice().reverse().map(function (s, i) {
+          var before = prev[s.id];
           var stepDetail = function (st) { return st.file || st.url || (st.command ? st.command.join(' ') : '') || (st.sql ? 'inline sql' : '') || (st.script ? 'inline script' : ''); };
           return '<article class="card seed" style="--i:' + i + '"><div class="head"><div style="min-width:0"><div class="id">' + esc(s.id) +
             (s.pinned ? badge('green', 'pinned') : '') + (s.applied ? badge('blue', s.changed ? 'applied, files changed since' : 'applied') : '') + (s.latest ? badge('grey', 'latest') : '') + '</div>' +
             '<div class="title">' + esc(s.title) + '</div></div>' +
-            '<button class="btn small' + (s.pinned ? ' primary' : '') + '" data-reset-persona="' + esc(s.persona) + '" data-reset-version="' + s.version + '"><span>Apply</span></button></div>' +
+            '<div class="acts">' + (before ? '<button class="btn small ghost" data-compare-from="' + esc(before.id) + '" data-compare-to="' + esc(s.id) + '"><span>Compare with v' + esc(before.version) + '</span></button>' : '') +
+            '<button class="btn small' + (s.pinned ? ' primary' : '') + '" data-reset-persona="' + esc(s.persona) + '" data-reset-version="' + esc(s.version) + '"><span>Apply</span></button></div></div>' +
             (s.description ? '<p class="desc">' + esc(s.description) + '</p>' : '') +
             (s.problems.length ? '<div class="alert">' + I.alert + '<div><b>Problems</b>' + s.problems.map(esc).join('<br>') + '</div></div>' : '') +
             '<div class="cols"><div><h4>Steps</h4><ol>' + s.steps.map(function (st, k) {
@@ -1742,6 +1746,12 @@
     Array.prototype.forEach.call(panel.querySelectorAll('[data-reset-persona]'), function (b) {
       b.addEventListener('click', function () { resetDialog(envView.data, name, b.getAttribute('data-reset-persona'), parseInt(b.getAttribute('data-reset-version'), 10)); });
     });
+    Array.prototype.forEach.call(panel.querySelectorAll('[data-compare-from]'), function (b) {
+      b.addEventListener('click', function () { compareDialog(name, b.getAttribute('data-compare-from'), b.getAttribute('data-compare-to')); });
+    });
+    Array.prototype.forEach.call(panel.querySelectorAll('[data-bump]'), function (b) {
+      b.addEventListener('click', function () { bumpDialog(name, b.getAttribute('data-bump')); });
+    });
     Array.prototype.forEach.call(panel.querySelectorAll('[data-heal]'), function (b) {
       b.addEventListener('click', function () {
         busy(b, 'Healing');
@@ -1779,6 +1789,128 @@
     if (stale) stale.addEventListener('click', function () {
       busy(stale, 'Running drift queries');
       envView.draw(false, true).then(function () { renderPanel(true); }).catch(function (e) { toast('Stale check failed', 'error', e.message); });
+    });
+  }
+
+  // ---------- seed set versions ----------
+  function seedOptions(d, selected) {
+    return d.seeds.map(function (s) {
+      return '<option value="' + esc(s.id) + '"' + (s.id === selected ? ' selected' : '') + '>' + esc(s.id) + (s.title && s.title !== s.id ? ' · ' + esc(s.title) : '') + '</option>';
+    }).join('');
+  }
+  function diffHtml(r) {
+    if (r.identical) {
+      return '<div class="card empty cmp-same"><span class="icon-tile">' + I.check + '</span><h2>Identical</h2><p>Every file of <span class="mono dim">' + esc(r.from) + '</span> matches <span class="mono dim">' + esc(r.to) + '</span>.</p></div>';
+    }
+    var st = r.stat, m = r.manifest, files = r.files || [];
+    var kind = { added: 'green', removed: 'red', changed: 'amber', unchanged: 'grey' };
+    var size = function (f) {
+      if (f.status === 'added') return f.newSize + ' B';
+      if (f.status === 'removed') return f.oldSize + ' B';
+      if (f.status === 'changed') return f.oldSize + ' &rarr; ' + f.newSize + ' B';
+      return f.newSize + ' B';
+    };
+    var html = '<h4 class="cmp-h">Files</h4><p class="small muted">' + esc(st.added + ' added, ' + st.removed + ' removed, ' + st.changed + ' changed, ' + st.unchanged + ' unchanged') + '</p>' +
+      '<ul class="cmp-files">' + files.map(function (f) {
+        return '<li>' + badge(kind[f.status] || 'grey', f.status) + '<span class="mono path" title="' + esc(f.path) + '">' + esc(f.path) + '</span>' +
+          (f.binary ? chip('grey', 'binary') : '') + '<span class="xs muted num">' + size(f) + '</span></li>';
+      }).join('') + '</ul>';
+    var rows = [];
+    if (m.title) rows.push('<li>' + badge('amber', 'changed') + '<span>title <span class="muted">' + esc(m.title.from || '(none)') + '</span> &rarr; <b>' + esc(m.title.to || '(none)') + '</b></span></li>');
+    if (m.description) rows.push('<li>' + badge('amber', 'changed') + '<span>description</span></li>');
+    (m.fields || []).forEach(function (f) { rows.push('<li>' + badge('amber', 'changed') + '<span>' + esc(f) + '</span></li>'); });
+    [['step', m.steps], ['verify', m.verify]].forEach(function (pair) {
+      var label = pair[0], it = pair[1] || {};
+      (it.added || []).forEach(function (n) { rows.push('<li>' + badge('green', 'added') + '<span>' + label + ' <b>' + esc(n) + '</b></span></li>'); });
+      (it.removed || []).forEach(function (n) { rows.push('<li>' + badge('red', 'removed') + '<span>' + label + ' <b>' + esc(n) + '</b></span></li>'); });
+      (it.changed || []).forEach(function (c) { rows.push('<li>' + badge('amber', 'changed') + '<span>' + label + ' <b>' + esc(c.name) + '</b> <span class="mono xs muted">' + esc((c.fields || []).join(', ')) + '</span></span></li>'); });
+      if (it.reordered) rows.push('<li>' + badge('blue', 'moved') + '<span>' + label + ' order changed</span></li>');
+    });
+    html += '<h4 class="cmp-h">Manifest</h4>' + (rows.length ? '<ul class="cmp-man">' + rows.join('') + '</ul>' : '<p class="small muted">Steps, verify checks, title and description are the same.</p>');
+    files.filter(function (f) { return f.status === 'changed'; }).forEach(function (f) {
+      html += '<div class="cmp-file"><div class="cmp-file-head"><span class="mono">' + esc(f.path) + '</span><span class="xs muted num">' + size(f) + '</span></div>';
+      if (f.binary) {
+        html += '<p class="small muted">Binary file; hash ' + esc((f.oldHash || '').slice(0, 12)) + ' &rarr; ' + esc((f.newHash || '').slice(0, 12)) + '.</p>';
+      } else if (!f.hunks || !f.hunks.length) {
+        html += '<p class="small muted">' + esc(f.note || 'No line changes.') + '</p>';
+      } else {
+        html += '<div class="log diff"><div class="dl">' + f.hunks.map(function (h) {
+          return '<div class="l hunk">' + esc(h.header) + '</div>' + h.lines.map(function (l) {
+            var c = l.charAt(0) === '+' ? 'add' : l.charAt(0) === '-' ? 'del' : 'ctx';
+            return '<div class="l ' + c + '">' + esc(l) + '</div>';
+          }).join('');
+        }).join('') + '</div></div>' + (f.truncated ? '<p class="xs muted" style="margin-top:6px">Diff truncated: at most 2,000 lines, or the first 256 KiB of each file.</p>' : '');
+      }
+      html += '</div>';
+    });
+    return html;
+  }
+  function compareDialog(name, from, to) {
+    var d = envView && envView.data;
+    if (!d) return;
+    modal({
+      width: 980,
+      title: '<h2>Compare seed sets</h2>',
+      body: '<div class="fields"><div class="field" style="margin-top:0"><label for="cmp-from">From</label><select id="cmp-from">' + seedOptions(d, from) + '</select></div>' +
+        '<div class="field" style="margin-top:0"><label for="cmp-to">To</label><select id="cmp-to">' + seedOptions(d, to) + '</select></div></div>' +
+        '<div id="cmp-out" class="cmp"></div>',
+      footer: '<button class="btn primary" data-close><span>Close</span></button>'
+    }, function (root) {
+      var fs = root.querySelector('#cmp-from'), ts = root.querySelector('#cmp-to'), out = root.querySelector('#cmp-out');
+      var seq = 0;
+      var load = function () {
+        var mine = ++seq;
+        out.innerHTML = '<p class="small muted cmp-wait">' + I.ring + '<span>Comparing</span></p>';
+        api('/api/v1/environments/' + encodeURIComponent(name) + '/seeds/diff?from=' + encodeURIComponent(fs.value) + '&to=' + encodeURIComponent(ts.value))
+          .then(function (r) { if (mine === seq) out.innerHTML = diffHtml(r); })
+          .catch(function (e) { if (mine === seq) out.innerHTML = '<div class="alert">' + I.alert + '<div><b>Could not compare</b>' + esc(e.message) + '</div></div>'; });
+      };
+      fs.addEventListener('change', load);
+      ts.addEventListener('change', load);
+      load();
+    });
+  }
+  function bumpDialog(name, persona) {
+    var d = envView && envView.data;
+    if (!d) return;
+    var sets = d.seeds.filter(function (s) { return s.persona === persona; }).reverse();
+    if (!sets.length) return;
+    var next = sets[0].version + 1;
+    var titleOf = function (v) {
+      var s = sets.filter(function (x) { return x.version === v; })[0];
+      return s && s.title !== s.id ? s.title : '';
+    };
+    modal({
+      width: 480,
+      title: '<h2>New version of <span class="mono">' + esc(persona) + '</span></h2>',
+      body: '<p class="lead">Copies every file of the chosen version to <span class="mono dim">' + esc(persona + '@v' + next) + '</span> and sets its version in seed.json. Comments and formatting in seed.json are kept.</p>' +
+        '<div class="field"><label for="bump-from">Copy from</label><select id="bump-from">' + sets.map(function (s) {
+          return '<option value="' + esc(s.version) + '">v' + esc(s.version) + (s.title && s.title !== s.id ? ' · ' + esc(s.title) : '') + (s.pinned ? ' (pinned)' : '') + '</option>';
+        }).join('') + '</select></div>' +
+        '<div class="field"><label for="bump-title">Title</label><input type="text" id="bump-title" maxlength="200"></div>' +
+        '<label class="check-row"><input type="checkbox" id="bump-pin"> Pin the environment to it</label>',
+      footer: '<button class="btn ghost" data-close><span>Cancel</span></button><button class="btn primary" id="bump-go"><span>Create v' + esc(next) + '</span></button>'
+    }, function (root, close) {
+      var fsel = root.querySelector('#bump-from'), tin = root.querySelector('#bump-title'), go = root.querySelector('#bump-go');
+      var shown = titleOf(sets[0].version);
+      tin.value = shown;
+      fsel.addEventListener('change', function () {
+        if (tin.value === shown) { shown = titleOf(parseInt(fsel.value, 10)); tin.value = shown; }
+      });
+      go.addEventListener('click', function () {
+        var title = tin.value.trim();
+        busy(go, 'Creating');
+        api('/api/v1/environments/' + encodeURIComponent(name) + '/seeds/' + encodeURIComponent(persona) + '/bump', { method: 'POST', body: { from: parseInt(fsel.value, 10), title: title === shown ? '' : title, pin: root.querySelector('#bump-pin').checked } })
+          .then(function (r) {
+            close();
+            toast('Created ' + r.id, 'ok', r.pinned ? 'The environment is pinned to it.' : 'Copied from ' + r.from + '.');
+            if (r.warning) toast('Not pinned', 'error', r.warning);
+            var v = envView;
+            if (!v || v.name !== name || !v.draw) return;
+            v.draw(false, false).then(function () { if (envView === v) compareDialog(name, r.from, r.id); }).catch(function () {});
+          })
+          .catch(function (e) { toast('New version failed', 'error', e.message); go.disabled = false; go.innerHTML = '<span>Create v' + esc(next) + '</span>'; });
+      });
     });
   }
 

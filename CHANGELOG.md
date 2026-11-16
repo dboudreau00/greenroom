@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.7.0
+
+Seed set authoring: compare two versions, bump to the next one.
+
+- `greenroom seeds diff <env> <from> <to>`: files added, removed, changed
+  and unchanged by content hash; a unified diff (Myers, three lines of
+  context, CRLF normalized) per changed text file; binaries (NUL in the
+  first 8 KiB or not UTF-8) by size and hash; a file diff capped at 2,000
+  lines of output or 256 KiB of input, marked truncated. The manifest is
+  compared by meaning: title, description, other top-level fields, and
+  steps and verify checks added, removed or changed by name with the
+  fields that differ. `--stat`, `--json`; exit 0 identical, 1 different.
+  Personas may differ, environments may not.
+- `greenroom seeds bump <env> <persona> [--from vN] [--title t] [--pin]`
+  copies a set to the version after the highest on disk, built in a hidden
+  directory and renamed into place once it loads with no new problems.
+  `version` and `title` in the copy's `seed.json`, and `pin` in
+  `environment.json` with `--pin`, are edited textually at the top level
+  only, so comments and formatting survive. Refused when the target
+  exists.
+- `greenroom seeds <env>` lists as before; `diff` and `bump` as the first
+  argument are the subcommands.
+- Portal: "Compare with vN" on every seed set after a persona's first and
+  "New version" on each persona. The comparison shows the file list with
+  badges and sizes, the manifest summary and the line diffs in the dark log
+  pane, with From and To pickers across every persona of the environment.
+  A new version opens its comparison with the source.
+- API: `GET /api/v1/environments/{env}/seeds/diff`,
+  `POST /api/v1/environments/{env}/seeds/{persona}/bump`.
+
 ## 0.6.0
 
 Demo debriefs and a gaps board.

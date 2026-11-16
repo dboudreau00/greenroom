@@ -44,7 +44,9 @@ Commands:
   snapshot    capture a known-good baseline for a dependency
   heal        run a dependency's heal action
   envs        list environments
-  seeds       list seed sets of an environment
+  seeds       list seed sets of an environment; "seeds diff" compares two, "seeds bump"
+              copies one to the next version (so "seeds" can not list an
+              environment named diff or bump)
   targets     check connectivity of an environment's targets
   validate    load every environment and seed set and report problems
   templates   list the environment templates and their product modules
@@ -613,13 +615,21 @@ func (c *cli) envs(args []string) int {
 }
 
 func (c *cli) seeds(args []string) int {
+	if len(args) > 0 {
+		switch args[0] {
+		case "diff":
+			return c.seedsDiff(args[1:])
+		case "bump":
+			return c.seedsBump(args[1:])
+		}
+	}
 	fs := newFlags("seeds", c.stderr)
 	asJSON := fs.Bool("json", false, "print as JSON")
 	if err := fs.Parse(reorder(fs, args)); err != nil {
 		return 3
 	}
 	if fs.NArg() < 1 {
-		return c.fail(errors.New("usage: greenroom seeds <env>"))
+		return c.fail(errors.New("usage: greenroom seeds <env>, seeds diff <env> <from> <to>, seeds bump <env> <persona>"))
 	}
 	if err := c.load(true); err != nil {
 		return c.fail(err)

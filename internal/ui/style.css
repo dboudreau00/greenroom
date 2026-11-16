@@ -345,6 +345,31 @@ td.num, th.num { text-align: right; }
 .seed li .file { display: block; font-family: var(--gr-font-mono); font-size: 12px; color: var(--gr-text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .seed .files li { justify-content: space-between; }
 .seed .hash { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--gr-border); font-size: 12px; color: var(--gr-text-3); }
+.persona-head { flex-wrap: wrap; }
+.persona-head .btn { margin-left: auto; align-self: center; }
+.seed .head .acts { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ---------- seed set comparison ---------- */
+.cmp { margin-top: 14px; min-width: 0; }
+.cmp-wait { display: flex; align-items: center; gap: 8px; }
+.cmp .cmp-h { margin-top: 18px; }
+.cmp .cmp-h:first-child { margin-top: 0; }
+.cmp-files, .cmp-man { list-style: none; margin: 8px 0 0; padding: 0; }
+.cmp-files li, .cmp-man li { display: flex; align-items: center; gap: 8px; margin-top: 6px; min-width: 0; font-size: 13px; }
+.cmp-files .badge, .cmp-man .badge, .cmp-files .chip, .cmp-files .num { flex-shrink: 0; }
+.cmp-files .path { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cmp-man li > span { min-width: 0; overflow-wrap: anywhere; }
+.cmp-man b { font-weight: 500; color: var(--gr-text); }
+.cmp-file { margin-top: 20px; min-width: 0; }
+.cmp-file-head { display: flex; justify-content: space-between; gap: 8px; min-width: 0; padding-bottom: 6px; border-bottom: 1px solid var(--gr-border); font-size: 13px; }
+.cmp-file-head .mono { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.log.diff { max-height: 420px; overflow: auto; padding: 8px 0; }
+.log.diff .dl { display: inline-block; min-width: 100%; }
+.log.diff .l { display: block; padding: 0 12px; white-space: pre; word-break: normal; animation: none; }
+.log.diff .ctx { color: #9aa8c0; }
+.log.diff .add { color: #86efac; background: rgba(34, 197, 94, 0.12); }
+.log.diff .del { color: #fca5a5; background: rgba(239, 68, 68, 0.12); }
+.log.diff .hunk { color: #6b7a95; }
 
 /* ---------- stale ---------- */
 .stale-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; }

@@ -18,5 +18,6 @@ then `greenroom reset {{env}} --brand <slug>`.
 | Web | {{webPort}} |
 
 Each persona under `seeds/` is one seed set built from the modules it
-walks through. Edit them like any other seed set: copy `v1` to `v2`,
-change it, and bump `pin.version` when it is ready.
+walks through. Edit them like any other seed set: `greenroom seeds bump
+{{env}} <persona>` copies `v1` to `v2`; change the copy, and add `--pin`
+(or edit `pin.version`) when it is ready.

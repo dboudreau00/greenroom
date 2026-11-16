@@ -87,6 +87,7 @@ func (s *Server) routes() {
 	s.brandRoutes()
 	s.demoRoutes()
 	s.debriefRoutes()
+	s.seedRoutes()
 }
 
 func (s *Server) withHeaders(next http.Handler) http.Handler {

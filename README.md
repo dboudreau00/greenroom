@@ -224,7 +224,8 @@ ssh host.
 
 `greenroom serve` hosts a token-protected UI over the same engine. One-click
 pre-call check, a reset dialog with persona and version, heal and snapshot
-buttons per dependency, a seed set browser, live run logs over server-sent
+buttons per dependency, a seed set browser that compares versions and
+creates the next one, live run logs over server-sent
 events, and a JSON API for automation.
 
 It ships inside the binary: no build step, no bundler, no CDN for anything
@@ -261,6 +262,8 @@ decorative animation turns itself off under `prefers-reduced-motion`.
 | `greenroom demos [--past\|--all]`, `demo show`, `demo note`, `demo set`, `demo cancel`, `demo log` | Demo tracker and journal from the shell | |
 | `greenroom debrief <id> --rating 4 [--gap "kind:severity:title"]`, `debriefs [--since 30d]` | Write a demo's debrief; the queue and insights | |
 | `greenroom gaps`, `gaps show`, `gaps set`, `gaps merge`, `gaps export [--format md\|csv]` | The gaps board, edits, merges, spec export | |
+| `greenroom seeds diff <env> <from> <to> [--stat] [--json]` | Compare two seed sets: files, line diffs, steps and verify checks | 0 identical, 1 different |
+| `greenroom seeds bump <env> <persona> [--from vN] [--title t] [--pin]` | Copy a seed set to the next version, comments kept; optionally pin it | |
 | `greenroom seeds <env>`, `envs`, `targets`, `validate` | Listings and config checks | |
 | `greenroom serve` | Portal, API and the background prober | |
 | `greenroom init` | Scaffold a workspace with the bundled example | |
