@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.7.2
+
+Fixes found while capturing the README tour.
 
 - `saas-web`: the demo page now takes the prospect's colors; the default
   colors were declared after the brand stylesheet and always won.
