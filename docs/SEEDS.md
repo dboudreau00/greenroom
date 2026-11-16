@@ -53,7 +53,10 @@ reset.
 
 Steps run in order. A failing step fails the run unless it sets
 `continueOnError`. Every step takes `name`, `kind`, optional `timeout`,
-`env` (extra variables, `${VAR}` expanded) and `continueOnError`.
+`env` (extra variables, `${VAR}` expanded) and `continueOnError`. `sql`,
+`command`, `http` and `copy` steps also take `personalize`, which fills
+`{{brand.name}}` and the other brand placeholders at reset time; see
+[PERSONALIZE.md](PERSONALIZE.md).
 
 | Kind | Fields | What happens |
 | --- | --- | --- |
@@ -62,6 +65,7 @@ Steps run in order. A failing step fails the run unless it sets
 | `command` | `target`, `command` (argv), optional `file` as stdin, location fields | Runs a program on the target. |
 | `http` | `url`, `method`, `headers`, `body` or `bodyFile`, `expectStatus`, `insecure` | Sends a request. Handy for fixtures loaded through an admin API. |
 | `copy` | `target`, `file`, `dest`, location fields | Copies a file to the target (docker, kubernetes, ssh, ssm, local). |
+| `asset` | `asset`, `target`, `dest`, location fields, optional `file` as fallback | Copies an image from the brand kit chosen for the reset; without one, the fallback file. See [PERSONALIZE.md](PERSONALIZE.md). |
 | `wait` | `dependency`, `timeout` | Polls the dependency's probe until it passes. |
 
 Location fields select where a shell, command or copy step runs:
@@ -73,7 +77,7 @@ resource such as `deployment/db`), `instanceId` (aws through SSM). With no
 `env` values from the step's `env`, then the environment's `env`, then the
 process environment. Verify checks expand `url` and `command` the same way,
 from the environment's `env` and the process environment. File contents are
-used verbatim.
+used verbatim, unless the step sets `personalize`.
 
 ## Verify
 
@@ -138,6 +142,8 @@ wiped, and read-only mounts are skipped.
 | `drift-error` | stale or warn | A drift check could not be evaluated. Stale when it passed right after the reset (the seeded data is gone), otherwise a warning. |
 | `redeployed`, `server-changed`, `output-changed` | warn | Workload generation, database version or probe output changed. |
 | `probe-warning` | warn | Certificate expiring, healthcheck starting, and similar. |
+| `brand-changed` | stale | The brand kit the reset used was edited or re-fetched since. |
+| `brand-missing` | stale | The brand kit the reset used was deleted. |
 | `newer-version` | info | A newer version of the pinned persona exists. |
 | `app-changed`, `cert-rotated` | info | Application version or certificate changed. |
 

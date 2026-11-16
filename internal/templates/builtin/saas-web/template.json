@@ -78,6 +78,9 @@
   "seed": {
     "dependencies": ["postgres", "cache"],
     "after": [
+      { "name": "brand-css", "kind": "copy", "target": "docker", "container": "{{envSlug}}-web", "file": "seed/brand/brand.css", "dest": "/srv/brand/brand.css", "personalize": true },
+      { "name": "brand-json", "kind": "copy", "target": "docker", "container": "{{envSlug}}-web", "file": "seed/brand/brand.json", "dest": "/srv/brand/brand.json", "personalize": true },
+      { "name": "brand-logo", "kind": "asset", "asset": "logo", "target": "docker", "container": "{{envSlug}}-web", "file": "seed/brand/logo.svg", "dest": "/srv/brand/" },
       { "name": "cache-flush", "kind": "command", "target": "docker", "container": "{{envSlug}}-cache", "command": ["redis-cli", "FLUSHALL"], "continueOnError": true },
       { "name": "warm-web", "kind": "http", "url": "${APP_WEB_URL}", "expectStatus": 200, "continueOnError": true }
     ],

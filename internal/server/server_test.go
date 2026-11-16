@@ -22,6 +22,12 @@ import (
 
 func newTestServer(t *testing.T, token string) (*httptest.Server, *engine.Engine) {
 	t.Helper()
+	return newTestServerWS(t, token, "")
+}
+
+// newTestServerWS writes wsJSON as greenroom.json when it is not empty.
+func newTestServerWS(t *testing.T, token, wsJSON string) (*httptest.Server, *engine.Engine) {
+	t.Helper()
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
 	t.Cleanup(api.Close)
 	dir := t.TempDir()
@@ -32,6 +38,9 @@ func newTestServer(t *testing.T, token string) (*httptest.Server, *engine.Engine
 	b, _ := json.Marshal(env)
 	os.WriteFile(filepath.Join(envDir, config.EnvironmentFile), b, 0o644)
 	os.WriteFile(filepath.Join(envDir, "seeds", "cfo", "v1", config.SeedFile), []byte(`{"steps":[{"name":"ping","kind":"http","url":"`+api.URL+`/seed"}]}`), 0o644)
+	if wsJSON != "" {
+		os.WriteFile(filepath.Join(dir, config.WorkspaceFile), []byte(wsJSON), 0o644)
+	}
 	ws, err := config.LoadWorkspace(dir)
 	if err != nil {
 		t.Fatal(err)

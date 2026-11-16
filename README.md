@@ -87,6 +87,24 @@ greenroom reset acme-crm
 
 Add your own under `templates/`; see [docs/TEMPLATES.md](docs/TEMPLATES.md).
 
+## Personalize for the prospect
+
+Fetch a brand kit from the prospect's website and reset the demo in their
+name, colors and logo. Seed steps that set `personalize` get
+`{{brand.name}}`, `{{brand.primary}}` and the rest, escaped for SQL, JSON,
+HTML, CSS or a URL by where they land; an `asset` step drops the logo into
+the app. Without a kit, the environment's house brand fills the same slots.
+
+```bash
+greenroom brand fetch https://larkspur.example
+greenroom reset acme-crm --brand larkspur
+```
+
+The link fetcher only reaches public addresses on ports 80 and 443, checks
+every address it dials, and refuses SVG that could run script. An edited
+or deleted kit shows up in the stale report. See
+[docs/PERSONALIZE.md](docs/PERSONALIZE.md).
+
 ## Five minutes to green
 
 ```bash
@@ -195,11 +213,13 @@ decorative animation turns itself off under `prefers-reduced-motion`.
 | --- | --- | --- |
 | `greenroom check <env>` | Probe every dependency, record samples, report readiness and staleness | 0 green, 1 amber, 2 red |
 | `greenroom stale <env>` | Compare pin, applied record, fingerprints and drift checks | 0 fresh, 1 stale |
-| `greenroom reset <env> [persona@vN]` | Reset strategies, seed steps, verify, record | 0 ok, 1 failed |
+| `greenroom reset <env> [persona@vN] [--brand slug]` | Reset strategies, seed steps, verify, record; personalized for a brand kit | 0 ok, 1 failed |
 | `greenroom snapshot <env> <dep>` | Capture a Postgres template or a Docker commit with volumes | |
 | `greenroom heal <env> <dep>` | Run a dependency's heal action and re-probe | |
 | `greenroom new <env> --template t [--modules a,b]` | Create an environment from a template | |
 | `greenroom templates [name]` | Templates, their modules, personas and params | |
+| `greenroom brand fetch <url> [--slug s] [--name n] [--replace]` | Build a brand kit from a prospect's site | |
+| `greenroom brands`, `brand show`, `brand set`, `brand asset`, `brand rm` | List, inspect, edit, extend and delete brand kits | |
 | `greenroom seeds <env>`, `envs`, `targets`, `validate` | Listings and config checks | |
 | `greenroom serve` | Portal, API and the background prober | |
 | `greenroom init` | Scaffold a workspace with the bundled example | |
@@ -224,6 +244,7 @@ run logs.
 - [docs/CONFIG.md](docs/CONFIG.md): every field of the workspace, environment, target and dependency files
 - [docs/SEEDS.md](docs/SEEDS.md): the seed set format, step kinds, what a reset does, the stale rules
 - [docs/TEMPLATES.md](docs/TEMPLATES.md): environment templates, product modules, writing your own
+- [docs/PERSONALIZE.md](docs/PERSONALIZE.md): brand kits, the link fetcher, brand placeholders and their escaping
 - [docs/DEPLOY.md](docs/DEPLOY.md): hosting, security model, upgrades
 - [docs/API.md](docs/API.md): the HTTP API and server-sent events
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how the packages fit together

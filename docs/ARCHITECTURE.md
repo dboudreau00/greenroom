@@ -5,6 +5,8 @@ cmd/greenroom            CLI and "serve"
 internal/config          workspace and environment schema, loading, validation, ${VAR} expansion
 internal/seeds           seed set discovery, manifest validation, content hashing
 internal/templates       built-in and workspace templates, module resolution, rendering
+internal/brand           brand kits: page extraction, image typing and SVG checks, placeholder rendering
+internal/webfetch        the guarded HTTP client for links people paste (public addresses only)
 internal/state           applied record, uptime samples, runs, snapshots, heal events (files)
 internal/targets         Executor / Copier / Pinger contracts and helpers
   docker/                Docker Engine API over unix, npipe or tcp, exec with hijacked stream
@@ -80,11 +82,15 @@ state/<env>/
   snapshots.json      one record per dependency snapshot
   snapshots/<dep>/    container.json and mount-N.tar for docker snapshots
   heals.json          last 200 heal attempts
+state/_brands/<slug>/
+  brand.json          brand kit: name, tagline, colors, asset list
+  <asset>.<ext>       logo, icon and other images, typed by content
 ```
 
 Writes are atomic (temp file plus rename). The CLI and the portal can share
 a state directory; a reset holds a per-environment lock inside one process,
-and the applied record is only written on success.
+and the applied record is only written on success. `_brands` can not
+collide with an environment, whose names start with a letter or digit.
 
 ## Why no external dependencies beyond two SQL drivers
 

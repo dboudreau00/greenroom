@@ -254,6 +254,13 @@ func (e *Engine) StaleReport(ctx context.Context, v *Env, results []probe.Result
 		if age > limit {
 			add("stale", "", "too-old", fmt.Sprintf("last reset %s ago, limit is %s", humanDuration(age), humanDuration(limit)), "run: greenroom reset "+v.Config.Name)
 		}
+		if b := applied.Brand; b != nil && b.Slug != "" {
+			if kit, err := e.brands.Get(b.Slug); err != nil {
+				add("stale", "", "brand-missing", fmt.Sprintf("brand kit %s used by the reset no longer exists", b.Slug), "run: greenroom reset "+v.Config.Name+" with another brand")
+			} else if kit.Hash() != b.Hash {
+				add("stale", "", "brand-changed", fmt.Sprintf("brand kit %s changed since the reset", b.Slug), "run: greenroom reset "+v.Config.Name+" --brand "+b.Slug)
+			}
+		}
 		if pinned != nil {
 			if latest, ok := seeds.Find(v.Seeds, pinned.Persona, 0); ok && latest.Version > pinned.Version && v.Config.Pin.Version != 0 {
 				add("info", "", "newer-version", fmt.Sprintf("%s@v%d is available, pin is v%d", pinned.Persona, latest.Version, pinned.Version), "bump pin.version in environment.json")

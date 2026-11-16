@@ -68,11 +68,33 @@ type Workspace struct {
 	Token string `json:"token,omitempty"`
 	// PublicURL is used in links and in the login page, optional.
 	PublicURL string `json:"publicUrl,omitempty"`
+	// LinkFetch tunes the client that fetches brand kits and assets from
+	// links people paste.
+	LinkFetch LinkFetch `json:"linkFetch,omitempty"`
 
 	// BaseDir is the directory the workspace file lives in (not serialised).
 	BaseDir string `json:"-"`
 	// Path is where the workspace file was read from (not serialised).
 	Path string `json:"-"`
+}
+
+// LinkFetch configures fetching from links. By default only public
+// addresses on ports 80 and 443 can be reached.
+type LinkFetch struct {
+	// AllowPrivate permits loopback, private and link-local addresses and
+	// any port, for brand sites hosted inside the network.
+	AllowPrivate bool     `json:"allowPrivate,omitempty"`
+	Timeout      Duration `json:"timeout,omitempty"`
+}
+
+// BrandDefaults is the house brand a reset uses when no prospect brand kit
+// is chosen.
+type BrandDefaults struct {
+	Name    string `json:"name,omitempty"`
+	Tagline string `json:"tagline,omitempty"`
+	Domain  string `json:"domain,omitempty"`
+	Primary string `json:"primary,omitempty"`
+	Accent  string `json:"accent,omitempty"`
 }
 
 // Pin names the persona and seed version an environment is expected to run.
@@ -105,6 +127,8 @@ type Environment struct {
 	Env map[string]string `json:"env,omitempty"`
 	// Template is set when the environment was created with greenroom new.
 	Template *TemplateRef `json:"template,omitempty"`
+	// Brand holds the house brand used when a reset has no brand kit.
+	Brand *BrandDefaults `json:"brand,omitempty"`
 
 	Dir  string `json:"-"`
 	Path string `json:"-"`
@@ -452,6 +476,8 @@ func LoadEnvironments(dir string) ([]*Environment, error) {
 
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
 
+var colorRe = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+
 // ValidName reports whether s is safe to use as an environment, dependency,
 // persona or target name (it appears in paths and URLs).
 func ValidName(s string) bool { return nameRe.MatchString(s) }
@@ -574,6 +600,13 @@ func (e *Environment) Validate() error {
 				if !ValidName(p) {
 					fail("%s: drift[%d]: persona %q is not a valid name", where, j, p)
 				}
+			}
+		}
+	}
+	if e.Brand != nil {
+		for _, c := range []string{e.Brand.Primary, e.Brand.Accent} {
+			if c != "" && !colorRe.MatchString(c) {
+				fail("brand: color %q must be #rrggbb", c)
 			}
 		}
 	}

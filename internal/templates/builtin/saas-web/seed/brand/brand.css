@@ -1,0 +1,4 @@
+:root {
+  --brand: {{brand.primary}};
+  --brand-accent: {{brand.accent}};
+}

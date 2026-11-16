@@ -15,13 +15,21 @@ the portal session cookie. Responses are JSON. Errors are
 | GET | `/api/v1/environments/{env}?drift=true` | Full detail: dependencies with uptime, seed sets, runs, snapshots, heals, stale report, targets. |
 | POST | `/api/v1/environments/{env}/check?record=true&drift=true` | Run the pre-call check now; returns the report. |
 | GET | `/api/v1/environments/{env}/stale?drift=true` | Stale report only. |
-| POST | `/api/v1/environments/{env}/reset` | Body `{"persona":"cfo","version":2,"force":false,"skipReset":false}`. Returns `{"runId":...}` with 202. 409 when the environment is busy. |
+| POST | `/api/v1/environments/{env}/reset` | Body `{"persona":"cfo","version":2,"force":false,"skipReset":false,"brand":"larkspur"}`. `brand` is a brand kit slug; empty uses the house brand. Returns `{"runId":...}` with 202. 409 when the environment is busy, 400 for an unknown brand kit. |
 | POST | `/api/v1/environments/{env}/snapshot` | Body `{"dependency":"postgres"}`. Returns `{"runId":...}`. |
 | POST | `/api/v1/environments/{env}/dependencies/{dep}/heal` | Returns `{"runId":...}`. |
 | GET | `/api/v1/environments/{env}/targets` | Pings every target. |
 | GET | `/api/v1/environments/{env}/runs?limit=50` | Run summaries, running ones first. |
 | GET | `/api/v1/environments/{env}/runs/{id}` | Full run with steps and log. |
 | GET | `/api/v1/environments/{env}/runs/{id}/events` | Server-sent events: `snapshot` (run so far), then `log`, `step`, `done`. |
+| GET | `/api/v1/brands` | Brand kits, sorted by name, each with its `hash`. |
+| POST | `/api/v1/brands` | Fetch a kit from a link. Body `{"url":"https://larkspur.example","slug":"larkspur","name":"Larkspur","replace":false}`; only `url` is required. 201 with the kit, 409 when the slug exists and `replace` is false, 400 for a blocked or unusable link. |
+| GET | `/api/v1/brands/{slug}` | One kit. 404 when unknown. |
+| PATCH | `/api/v1/brands/{slug}` | Body `{"name":...,"tagline":...,"primary":"#0e7490","accent":...}`; absent fields are left alone, an empty color clears it. |
+| DELETE | `/api/v1/brands/{slug}` | Delete a kit and its files. |
+| POST | `/api/v1/brands/{slug}/assets` | Fetch one more image. Body `{"name":"hero","url":"https://larkspur.example/hero.webp"}`. 201 with the kit. |
+| GET | `/api/v1/brands/{slug}/assets/{name}` | The image, served with the content type decided when it was stored, `nosniff` and a sandboxing `Content-Security-Policy`. |
+| DELETE | `/api/v1/brands/{slug}/assets/{name}` | Remove one asset. |
 
 Mutating requests made with the session cookie must also send
 `X-Requested-With: greenroom`. Bearer requests do not.
@@ -47,6 +55,16 @@ id=$(curl -fsS -H "Authorization: Bearer $TOKEN" -X POST \
   https://greenroom.example.com/api/v1/environments/acme-demo/reset | jq -r .runId)
 curl -N -H "Authorization: Bearer $TOKEN" \
   https://greenroom.example.com/api/v1/environments/acme-demo/runs/$id/events
+```
+
+Brand kit links go through the guarded link fetcher; see
+[PERSONALIZE.md](PERSONALIZE.md).
+
+Personalize a reset for a prospect:
+
+```bash
+curl -fsS -H "Authorization: Bearer $TOKEN" -X POST   -d '{"url":"https://larkspur.example"}' https://greenroom.example.com/api/v1/brands | jq .slug
+curl -fsS -H "Authorization: Bearer $TOKEN" -X POST   -d '{"brand":"larkspur"}' https://greenroom.example.com/api/v1/environments/acme-demo/reset
 ```
 
 ## Readiness

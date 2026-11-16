@@ -84,6 +84,7 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/v1/environments/{env}/runs", s.auth(s.runs))
 	m.HandleFunc("GET /api/v1/environments/{env}/runs/{id}", s.auth(s.run))
 	m.HandleFunc("GET /api/v1/environments/{env}/runs/{id}/events", s.auth(s.runEvents))
+	s.brandRoutes()
 }
 
 func (s *Server) withHeaders(next http.Handler) http.Handler {
@@ -382,6 +383,7 @@ func (s *Server) reset(w http.ResponseWriter, r *http.Request) {
 		Version   int    `json:"version"`
 		Force     bool   `json:"force"`
 		SkipReset bool   `json:"skipReset"`
+		Brand     string `json:"brand"`
 	}
 	if r.Body != nil && r.ContentLength != 0 {
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&body); err != nil {
@@ -389,7 +391,7 @@ func (s *Server) reset(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	id, err := s.eng.StartReset(r.PathValue("env"), engine.ResetOptions{Persona: body.Persona, Version: body.Version, Force: body.Force, SkipReset: body.SkipReset, Actor: actorOf(r)})
+	id, err := s.eng.StartReset(r.PathValue("env"), engine.ResetOptions{Persona: body.Persona, Version: body.Version, Force: body.Force, SkipReset: body.SkipReset, Brand: body.Brand, Actor: actorOf(r)})
 	if err != nil {
 		status := http.StatusBadRequest
 		if strings.Contains(err.Error(), "busy") {

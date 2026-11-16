@@ -49,6 +49,8 @@ Commands:
   validate    load every environment and seed set and report problems
   templates   list the environment templates and their product modules
   new         create an environment from a template with the modules to show
+  brands      list brand kits used to personalize demos
+  brand       fetch a brand kit from a prospect's link, edit it, add assets
   init        scaffold a workspace with the bundled example environment
   version     print the version
 
@@ -118,6 +120,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return c.templates(cargs)
 	case "new":
 		return c.newEnv(cargs)
+	case "brands":
+		return c.brands(cargs)
+	case "brand":
+		return c.brand(cargs)
 	}
 	fmt.Fprintf(stderr, "unknown command %q\n\n%s", cmd, usage)
 	return 3
@@ -403,6 +409,7 @@ func (c *cli) reset(args []string) int {
 	version := fs.Int("version", 0, "seed version (default: pinned or latest)")
 	force := fs.Bool("force", false, "continue even if the preflight finds dependencies down")
 	skip := fs.Bool("skip-reset", false, "apply seed steps without running reset strategies")
+	brandSlug := fs.String("brand", "", "brand kit to personalize the demo for (greenroom brands lists them)")
 	yes := fs.Bool("yes", false, "do not ask for confirmation")
 	asJSON := fs.Bool("json", false, "print the run as JSON when done")
 	if err := fs.Parse(reorder(fs, args)); err != nil {
@@ -431,7 +438,11 @@ func (c *cli) reset(args []string) int {
 		return c.fail(err)
 	}
 	if !*yes {
-		fmt.Fprintf(c.stdout, "About to reset %s to %s (%s). Everything demoed since the last reset is discarded.\nContinue? [y/N] ", v.Config.DisplayTitle(), set.ID(), set.DisplayTitle())
+		forBrand := ""
+		if *brandSlug != "" {
+			forBrand = " for brand " + *brandSlug
+		}
+		fmt.Fprintf(c.stdout, "About to reset %s to %s (%s)%s. Everything demoed since the last reset is discarded.\nContinue? [y/N] ", v.Config.DisplayTitle(), set.ID(), set.DisplayTitle(), forBrand)
 		var answer string
 		fmt.Fscanln(os.Stdin, &answer)
 		if !strings.HasPrefix(strings.ToLower(answer), "y") {
@@ -439,7 +450,7 @@ func (c *cli) reset(args []string) int {
 			return 1
 		}
 	}
-	id, err := c.eng.StartReset(name, engine.ResetOptions{Persona: set.Persona, Version: set.Version, Force: *force, SkipReset: *skip, Actor: "cli"})
+	id, err := c.eng.StartReset(name, engine.ResetOptions{Persona: set.Persona, Version: set.Version, Force: *force, SkipReset: *skip, Brand: *brandSlug, Actor: "cli"})
 	if err != nil {
 		return c.fail(err)
 	}

@@ -19,6 +19,7 @@ Sits at the workspace root. Every field is optional.
 | `sampleRetention` | `720h` | How long uptime samples are kept. |
 | `healCooldown` | `5m` | Minimum gap between heals of the same dependency, manual or automatic. |
 | `token` | none | Portal and API token. `GREENROOM_TOKEN` overrides. Without a token the portal only binds to loopback. |
+| `linkFetch` | public only | `{ "allowPrivate": false, "timeout": "15s" }`. The client that fetches brand kits from pasted links. `allowPrivate` lets it reach loopback, private and link-local addresses on any port; see [PERSONALIZE.md](PERSONALIZE.md). |
 
 ## Environment: `environments/<name>/environment.json`
 
@@ -31,6 +32,7 @@ Sits at the workspace root. Every field is optional.
 | `env` | Extra variables available to `${VAR}` expansion and exported to shell steps. |
 | `targets` | Named platform connections, see below. |
 | `dependencies` | Ordered list of things the demo needs, see below. |
+| `brand` | House brand for resets without a brand kit: `{ "name", "tagline", "domain", "primary", "accent" }`, colors as `#rrggbb`. See [PERSONALIZE.md](PERSONALIZE.md). |
 | `template` | Written by `greenroom new`: the template, its version, product type and the modules the environment was built with. Informational. |
 
 ### Targets

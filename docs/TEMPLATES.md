@@ -125,8 +125,10 @@ Values are checked before they are used:
 - in `environment.json` and `seed.json` values are set as JSON strings, not
   spliced into text.
 
-Dotted names such as `{{brand.name}}` are reserved and left untouched. An
-unknown undotted placeholder fails the render.
+Dotted names such as `{{brand.name}}` are left alone when the template
+renders and filled at reset time in steps that set `personalize`; see
+[PERSONALIZE.md](PERSONALIZE.md). An unknown undotted placeholder fails
+the render.
 
 A step's `file` must stay inside `seed/` (base steps) or the module's own
 `modules/<name>/` directory.

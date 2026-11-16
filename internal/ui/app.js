@@ -155,6 +155,9 @@
       requestAnimationFrame(tick);
     });
   }
+  function setNav(which) {
+    Array.prototype.forEach.call(document.querySelectorAll('#topnav a'), function (a) { a.classList.toggle('active', a.getAttribute('data-nav') === which); });
+  }
   function setCrumbs(parts) {
     crumbs.innerHTML = parts.map(function (p) {
       return I.chevron + (p.href ? '<a href="' + esc(p.href) + '">' + esc(p.label) + '</a>' : '<span>' + esc(p.label) + '</span>');
@@ -354,6 +357,157 @@
     }).catch(function (e) { toast('Could not load templates', 'error', e.message); });
   }
 
+  // ---------- brand kits ----------
+  function kitLogo(k, size) {
+    var s = size || 40;
+    var a = k.assets && (k.assets.logo || k.assets.icon);
+    var initial = esc((k.name || k.slug || '?').charAt(0).toUpperCase());
+    if (!a) return '<span class="kit-logo empty" style="width:' + s + 'px;height:' + s + 'px">' + initial + '</span>';
+    return '<span class="kit-logo" style="width:' + s + 'px;height:' + s + 'px"><img alt="" src="/api/v1/brands/' + encodeURIComponent(k.slug) + '/assets/' + encodeURIComponent(a.name) + '?v=' + esc(a.sha256.slice(0, 8)) + '"></span>';
+  }
+  function swatch(c, label) {
+    if (!c) return '';
+    return '<span class="swatch" title="' + esc(label + ' ' + c) + '"><i style="background:' + esc(c) + '"></i><span class="mono xs">' + esc(c) + '</span></span>';
+  }
+  function kitCard(k, i) {
+    var names = Object.keys(k.assets || {}).sort();
+    return '<article class="card kit-card pad" style="--i:' + i + '"><div class="kit-head">' + kitLogo(k, 44) +
+      '<div style="min-width:0;flex:1"><b class="kit-name">' + esc(k.name) + '</b><div class="small muted mono">' + esc(k.slug) + (k.domain ? ' · ' + esc(k.domain) : '') + '</div></div></div>' +
+      (k.tagline ? '<p class="small dim kit-tag">' + esc(k.tagline) + '</p>' : '') +
+      '<div class="kit-meta">' + swatch(k.primary, 'primary') + swatch(k.accent, 'accent') + '</div>' +
+      '<div class="kit-meta small muted">' + names.length + ' asset' + (names.length === 1 ? '' : 's') + (names.length ? ': ' + esc(names.join(', ')) : '') + ' · updated ' + ago(k.updatedAt) + '</div>' +
+      '<div class="actions" style="margin-top:12px"><button class="btn small" data-kit-edit="' + esc(k.slug) + '"><span>Edit</span></button>' +
+      (k.url ? '<button class="btn small ghost" data-kit-refresh="' + esc(k.slug) + '"><span>Fetch again</span></button>' : '') +
+      '<button class="btn small ghost" data-kit-delete="' + esc(k.slug) + '"><span>Delete</span></button></div></article>';
+  }
+  function renderBrands() {
+    stopLive();
+    envView = null;
+    setCrumbs([{ label: 'Brand kits' }]);
+    var draw = function (animate) {
+      return api('/api/v1/brands').then(function (list) {
+        app.innerHTML = '<div class="spotlight"></div><div class="page' + (animate ? '' : ' static') + '">' +
+          '<header class="page-head rise"><div><h1>Brand kits</h1><div class="sub">Paste a prospect\'s link; Greenroom reads their name, colors, logo and icon. A reset can then put them into the demo.</div></div></header>' +
+          '<form class="card pad fetch-form rise" id="kit-fetch" autocomplete="off"><div class="field grow"><label for="kf-url">Website</label><input type="text" id="kf-url" class="mono" placeholder="https://www.prospect.example" required></div>' +
+          '<div class="field"><label for="kf-name">Name <span class="muted">(optional)</span></label><input type="text" id="kf-name" maxlength="80" placeholder="from the site"></div>' +
+          '<div class="field"><label for="kf-slug">Slug <span class="muted">(optional)</span></label><input type="text" id="kf-slug" class="mono" maxlength="63" placeholder="from the domain"></div>' +
+          '<button class="btn primary" type="submit" id="kf-go"><span>Fetch brand</span></button></form>' +
+          (list.length ? '<div class="grid kit-grid stagger">' + list.map(kitCard).join('') + '</div>'
+            : '<div class="card empty rise" style="margin-top:16px"><span class="icon-tile">' + I.folder + '</span><h2>No brand kits yet</h2><p>Fetch one from a prospect\'s website. Only public sites are reachable unless the workspace allows private ones.</p></div>') +
+          '</div>';
+        wireBrands(list);
+      });
+    };
+    draw(true).catch(function (e) { app.innerHTML = '<div class="alert">' + I.alert + '<div><b>Could not load brand kits</b>' + esc(e.message) + '</div></div>'; });
+    var wireBrands = function (list) {
+      var bySlug = {};
+      list.forEach(function (k) { bySlug[k.slug] = k; });
+      var form = document.getElementById('kit-fetch');
+      form.addEventListener('submit', function (ev) {
+        ev.preventDefault();
+        var go = document.getElementById('kf-go');
+        busy(go, 'Fetching');
+        api('/api/v1/brands', { method: 'POST', body: { url: document.getElementById('kf-url').value.trim(), name: document.getElementById('kf-name').value.trim(), slug: document.getElementById('kf-slug').value.trim() } })
+          .then(function (k) { toast('Brand kit ready', 'ok', k.name + ' (' + Object.keys(k.assets).length + ' assets)'); return draw(false).then(function () { editKit(k, draw); }); })
+          .catch(function (e) { toast('Fetch failed', 'error', e.message); go.disabled = false; go.innerHTML = '<span>Fetch brand</span>'; });
+      });
+      Array.prototype.forEach.call(app.querySelectorAll('[data-kit-edit]'), function (b) {
+        b.addEventListener('click', function () { editKit(bySlug[b.getAttribute('data-kit-edit')], draw); });
+      });
+      Array.prototype.forEach.call(app.querySelectorAll('[data-kit-refresh]'), function (b) {
+        b.addEventListener('click', function () {
+          var k = bySlug[b.getAttribute('data-kit-refresh')];
+          busy(b, 'Fetching');
+          api('/api/v1/brands', { method: 'POST', body: { url: k.url, slug: k.slug, replace: true } })
+            .then(function () { toast('Brand kit refreshed', 'ok', k.name + '; extra assets and edits were replaced'); draw(false); })
+            .catch(function (e) { toast('Fetch failed', 'error', e.message); draw(false); });
+        });
+      });
+      Array.prototype.forEach.call(app.querySelectorAll('[data-kit-delete]'), function (b) {
+        b.addEventListener('click', function () {
+          var k = bySlug[b.getAttribute('data-kit-delete')];
+          modal({
+            width: 440,
+            title: '<h2>Delete ' + esc(k.name) + '</h2>',
+            body: '<p class="lead">The kit and its ' + Object.keys(k.assets).length + ' stored files are removed for good. Environments personalized with it report the brand as missing until their next reset.</p>',
+            footer: '<button class="btn ghost" data-close><span>Cancel</span></button><button class="btn danger" id="kd-go"><span>Delete kit</span></button>'
+          }, function (root, close) {
+            root.querySelector('#kd-go').addEventListener('click', function () {
+              api('/api/v1/brands/' + encodeURIComponent(k.slug), { method: 'DELETE' })
+                .then(function () { close(); toast('Brand kit deleted', 'ok', k.slug); draw(false); })
+                .catch(function (e) { close(); toast('Delete failed', 'error', e.message); });
+            });
+          });
+        });
+      });
+    };
+  }
+  function editKit(k, redraw) {
+    var assetsHtml = function (kit) {
+      var names = Object.keys(kit.assets || {}).sort();
+      if (!names.length) return '<p class="small muted">No assets.</p>';
+      return '<ul class="asset-list">' + names.map(function (n) {
+        var a = kit.assets[n];
+        return '<li><span class="kit-logo" style="width:36px;height:36px"><img alt="" src="/api/v1/brands/' + encodeURIComponent(kit.slug) + '/assets/' + encodeURIComponent(n) + '?v=' + esc(a.sha256.slice(0, 8)) + '"></span>' +
+          '<span style="min-width:0;flex:1"><b>' + esc(n) + '</b> <span class="xs muted mono">' + esc(a.file) + ', ' + esc(a.type) + (a.width ? ', ' + a.width + 'x' + a.height : '') + '</span>' +
+          (a.source ? '<span class="xs muted mono block ellipsis" title="' + esc(a.source) + '">' + esc(a.source) + '</span>' : '') + '</span>' +
+          '<button class="btn small ghost" type="button" data-asset-rm="' + esc(n) + '"><span>Remove</span></button></li>';
+      }).join('') + '</ul>';
+    };
+    var colorField = function (id, label, val) {
+      return '<div class="field"><label for="' + id + '">' + label + '</label><div class="color-field"><input type="color" id="' + id + '-pick" value="' + esc(val || '#22c55e') + '" aria-label="' + label + ' picker">' +
+        '<input type="text" class="mono" id="' + id + '" value="' + esc(val || '') + '" placeholder="house color" maxlength="7"></div></div>';
+    };
+    modal({
+      width: 640,
+      title: kitLogo(k, 32) + '<div><h2>' + esc(k.name) + '</h2><p class="mono">' + esc(k.slug) + (k.domain ? ' · ' + esc(k.domain) : '') + '</p></div>',
+      body: '<div class="fields"><div class="field"><label for="ke-name">Name</label><input type="text" id="ke-name" maxlength="80" value="' + esc(k.name) + '"></div>' +
+        '<div class="field"><label for="ke-tag">Tagline</label><input type="text" id="ke-tag" maxlength="200" value="' + esc(k.tagline || '') + '"></div></div>' +
+        '<div class="fields">' + colorField('ke-primary', 'Primary', k.primary) + colorField('ke-accent', 'Accent', k.accent) + '</div>' +
+        '<h4 style="margin-top:18px">Assets</h4><div id="ke-assets">' + assetsHtml(k) + '</div>' +
+        '<div class="fields add-asset"><div class="field"><label for="ke-an">Asset name</label><input type="text" id="ke-an" class="mono" maxlength="32" placeholder="hero"></div>' +
+        '<div class="field"><label for="ke-au">Image link</label><input type="text" id="ke-au" class="mono" placeholder="https://cdn.prospect.example/hero.png"></div></div>' +
+        '<div class="actions" style="margin-top:8px"><button class="btn small" type="button" id="ke-add"><span>Fetch asset</span></button></div>' +
+        ((k.notes || []).length ? '<details class="params"><summary>Fetch notes <span class="muted">(' + k.notes.length + ')</span></summary><ul class="plain small muted">' + k.notes.map(function (n) { return '<li>' + esc(n) + '</li>'; }).join('') + '</ul></details>' : '') +
+        '<p class="small muted" style="margin-top:14px">Seed files use <span class="mono">{{brand.name}}</span>, <span class="mono">{{brand.primary}}</span>, <span class="mono">{{brand.logo}}</span> and the other keys; asset steps copy the logo or any asset by name.</p>',
+      footer: '<button class="btn ghost" data-close><span>Close</span></button><button class="btn primary" id="ke-save"><span>Save</span></button>'
+    }, function (root, close) {
+      ['ke-primary', 'ke-accent'].forEach(function (id) {
+        var pick = root.querySelector('#' + id + '-pick'), text = root.querySelector('#' + id);
+        pick.addEventListener('input', function () { text.value = pick.value; });
+        text.addEventListener('input', function () { if (/^#[0-9a-fA-F]{6}$/.test(text.value)) pick.value = text.value; });
+      });
+      var wireAssets = function (kit) {
+        Array.prototype.forEach.call(root.querySelectorAll('[data-asset-rm]'), function (b) {
+          b.addEventListener('click', function () {
+            busy(b, 'Removing');
+            api('/api/v1/brands/' + encodeURIComponent(kit.slug) + '/assets/' + encodeURIComponent(b.getAttribute('data-asset-rm')), { method: 'DELETE' })
+              .then(function (nk) { root.querySelector('#ke-assets').innerHTML = assetsHtml(nk); wireAssets(nk); redraw(false); })
+              .catch(function (e) { toast('Remove failed', 'error', e.message); });
+          });
+        });
+      };
+      wireAssets(k);
+      root.querySelector('#ke-add').addEventListener('click', function () {
+        var b = root.querySelector('#ke-add');
+        busy(b, 'Fetching');
+        api('/api/v1/brands/' + encodeURIComponent(k.slug) + '/assets', { method: 'POST', body: { name: root.querySelector('#ke-an').value.trim(), url: root.querySelector('#ke-au').value.trim() } })
+          .then(function (nk) { root.querySelector('#ke-assets').innerHTML = assetsHtml(nk); wireAssets(nk); root.querySelector('#ke-an').value = ''; root.querySelector('#ke-au').value = ''; redraw(false); })
+          .catch(function (e) { toast('Asset not added', 'error', e.message); })
+          .then(function () { b.disabled = false; b.innerHTML = '<span>Fetch asset</span>'; });
+      });
+      root.querySelector('#ke-save').addEventListener('click', function () {
+        var b = root.querySelector('#ke-save');
+        busy(b, 'Saving');
+        api('/api/v1/brands/' + encodeURIComponent(k.slug), { method: 'PATCH', body: {
+          name: root.querySelector('#ke-name').value, tagline: root.querySelector('#ke-tag').value,
+          primary: root.querySelector('#ke-primary').value.trim(), accent: root.querySelector('#ke-accent').value.trim() } })
+          .then(function () { close(); toast('Brand kit saved', 'ok', k.slug); redraw(false); })
+          .catch(function (e) { toast('Not saved', 'error', e.message); b.disabled = false; b.innerHTML = '<span>Save</span>'; });
+      });
+    });
+  }
+
   // ---------- environment ----------
   var TABS = [['deps', 'Dependencies'], ['seeds', 'Seed sets'], ['stale', 'Stale'], ['runs', 'Runs'], ['targets', 'Targets']];
   function tabCounts(d) {
@@ -367,7 +521,7 @@
   function statsHtml(d) {
     var stale = d.stale ? d.stale.stale : 0;
     return stat(0, 'Pinned seed set', '<span class="mono">' + esc(d.pinned || 'none') + '</span>', '', 'mono green') +
-      stat(1, 'Applied', '<span class="mono">' + esc(d.applied ? d.applied.setId : 'none') + '</span>', d.applied ? ago(d.applied.at) : 'never reset', 'mono') +
+      stat(1, 'Applied', '<span class="mono">' + esc(d.applied ? d.applied.setId : 'none') + '</span>', d.applied ? ago(d.applied.at) + (d.applied.brand ? ' for ' + d.applied.brand.name : '') : 'never reset', 'mono') +
       stat(2, 'Dependencies', '', d.down ? d.down + ' down' : d.warn ? d.warn + ' warn' : 'all up', d.down ? 'amber' : '', { v: d.deps }) +
       stat(3, 'Uptime 24h', '', d.lastProbe ? 'all dependencies' : 'no samples yet', '', { v: d.lastProbe ? d.uptime24h : 0, d: 2, s: '%' }) +
       stat(4, 'Stale items', '', 'limit ' + d.staleAfter, stale ? 'amber' : '', { v: stale });
@@ -565,7 +719,7 @@
     return '<div class="stagger"><section class="card table-wrap" style="--i:0"><div class="scroll"><table style="min-width:920px"><thead><tr><th style="width:20%">Started</th><th>Kind</th><th>Status</th><th style="width:30%">Summary</th><th class="num">Duration</th><th>By</th></tr></thead><tbody>' +
       d.runs.map(function (r, i) {
         return '<tr style="--i:' + i + '"><td class="nowrap"><a class="mono small" href="#/env/' + esc(d.name) + '/run/' + esc(r.id) + '">' + esc(when(r.startedAt)) + '</a><div class="small muted">' + ago(r.startedAt) + '</div></td>' +
-          '<td>' + esc(r.kind) + (r.persona ? ' ' + chip('green', r.persona + '@v' + r.version) : '') + '</td><td>' + statusBadge(r.status) + (r.failed ? ' <span class="small muted">' + r.failed + ' failed</span>' : '') + '</td>' +
+          '<td>' + esc(r.kind) + (r.persona ? ' ' + chip('green', r.persona + '@v' + r.version) : '') + (r.brand ? ' ' + chip('blue', r.brand) : '') + '</td><td>' + statusBadge(r.status) + (r.failed ? ' <span class="small muted">' + r.failed + ' failed</span>' : '') + '</td>' +
           '<td>' + esc(r.summary || r.error || '') + '</td><td class="num nowrap">' + dur(r.duration) + '</td><td class="mono small muted nowrap">' + esc(r.actor || '') + '</td></tr>';
       }).join('') + '</tbody></table></div></section></div>';
   }
@@ -662,7 +816,7 @@
     });
   }
 
-  function resetDialog(d, name, persona, version) {
+  function resetDialog(d, name, persona, version, brand) {
     var personas = {};
     d.seeds.forEach(function (s) { (personas[s.persona] = personas[s.persona] || []).push(s); });
     var names = Object.keys(personas);
@@ -680,15 +834,25 @@
       body: '<p class="lead">Greenroom runs the reset strategy of every dependency that has one, applies the selected seed set, verifies it, and records fingerprints. Anything demoed since the last reset is discarded.</p>' +
         '<div class="fields"><div class="field"><label for="rs-persona">Persona</label><select id="rs-persona">' + options + '</select></div>' +
         '<div class="field"><label for="rs-version">Version</label><select id="rs-version">' + versions(pinnedPersona, version) + '</select></div></div>' +
+        '<div class="field"><label for="rs-brand">Personalize for</label><select id="rs-brand"><option value="">House brand (no prospect)</option></select></div>' +
         '<label class="check-row"><input type="checkbox" id="rs-force"> Continue even if the preflight finds dependencies down</label>' +
         '<label class="check-row"><input type="checkbox" id="rs-skip"> Skip reset strategies (apply seed steps only)</label>',
       footer: '<button class="btn ghost" data-close><span>Cancel</span></button><button class="btn danger" id="rs-go"><span>Reset now</span></button>'
     }, function (root, close) {
-      var ps = root.querySelector('#rs-persona'), vs = root.querySelector('#rs-version');
+      var ps = root.querySelector('#rs-persona'), vs = root.querySelector('#rs-version'), bs = root.querySelector('#rs-brand');
       ps.addEventListener('change', function () { vs.innerHTML = versions(ps.value, 0); });
+      api('/api/v1/brands').then(function (kits) {
+        var last = d.applied && d.applied.brand ? d.applied.brand.slug : '';
+        kits.forEach(function (k) {
+          var o = document.createElement('option');
+          o.value = k.slug; o.textContent = k.name + (k.domain ? ' (' + k.domain + ')' : '');
+          if (k.slug === (brand || last)) o.selected = true;
+          bs.appendChild(o);
+        });
+      }).catch(function () {});
       root.querySelector('#rs-go').addEventListener('click', function () {
         busy(root.querySelector('#rs-go'), 'Starting');
-        api('/api/v1/environments/' + encodeURIComponent(name) + '/reset', { method: 'POST', body: { persona: ps.value, version: parseInt(vs.value, 10), force: root.querySelector('#rs-force').checked, skipReset: root.querySelector('#rs-skip').checked } })
+        api('/api/v1/environments/' + encodeURIComponent(name) + '/reset', { method: 'POST', body: { persona: ps.value, version: parseInt(vs.value, 10), force: root.querySelector('#rs-force').checked, skipReset: root.querySelector('#rs-skip').checked, brand: bs.value } })
           .then(function (r) { close(); toast('Reset started', 'info', 'following the run'); location.hash = '#/env/' + name + '/run/' + r.runId; })
           .catch(function (e) { toast('Reset refused', 'error', e.message); close(); });
       });
@@ -724,7 +888,7 @@
       app.innerHTML = '<div class="spotlight"></div><div class="page' + (animate ? '' : ' static') + '"><header class="run-head rise"><div style="min-width:0"><h1>' + esc(r.kind) + (r.persona ? ' <span class="mono">' + esc(r.persona) + '@v' + r.version + '</span>' : '') + statusBadge(r.status) + '</h1>' +
         '<p class="small muted num" style="margin-top:4px">' + esc(when(r.startedAt)) + (r.actor ? ' by <span class="mono">' + esc(r.actor) + '</span>' : '') + (live ? ', running' : ', took ' + dur(r.duration)) + '</p></div>' +
         '<div class="right"><div class="xs muted" style="text-transform:uppercase;letter-spacing:.06em">Run</div><div class="mono small dim">' + esc(r.id) + '</div></div></header>' +
-        '<div class="card run-summary rise" style="animation-delay:60ms">' + statusBadge(r.status) + '<span>' + esc(r.summary || r.error || (live ? 'in progress' : '')) + '</span>' + (r.persona ? chip('green', r.persona + '@v' + r.version) : '') + '</div>' +
+        '<div class="card run-summary rise" style="animation-delay:60ms">' + statusBadge(r.status) + '<span>' + esc(r.summary || r.error || (live ? 'in progress' : '')) + '</span>' + (r.persona ? chip('green', r.persona + '@v' + r.version) : '') + (r.brand ? chip('blue', 'for ' + r.brand) : '') + '</div>' +
         '<div class="run-grid"><section><h2>Steps <span class="muted num" id="step-count">' + r.steps.length + '</span></h2><div class="steps stagger" id="steps">' + r.steps.map(stepHtml).join('') + (r.steps.length ? '' : '<div class="small muted">no steps yet</div>') + '</div></section>' +
         '<section style="min-width:0"><h2>Log <span class="muted small">' + r.log.length + ' lines</span></h2><div class="log" id="log" role="log" aria-live="polite">' + r.log.map(lineHtml).join('') + (live ? '<div class="stream" id="stream"><i></i>streaming</div>' : '') + '</div></section></div></div>';
       var l = logEl(); if (l) l.scrollTop = l.scrollHeight;
@@ -771,7 +935,9 @@
   function route() {
     var h = location.hash.replace(/^#\/?/, '');
     var parts = h.split('/').filter(Boolean).map(decodeURIComponent);
+    setNav(parts[0] === 'brands' ? 'brands' : 'envs');
     var go = function (fn) { try { fn(); } catch (e) { app.innerHTML = '<div class="alert">' + I.alert + '<div><b>Error</b>' + esc(e.message) + '</div></div>'; } };
+    if (parts[0] === 'brands') return go(renderBrands);
     if (parts[0] === 'env' && parts[1]) {
       if (parts[2] === 'run' && parts[3]) return go(function () { renderRun(parts[1], parts[3]); });
       return go(function () { renderEnv(parts[1], parts[2]); });

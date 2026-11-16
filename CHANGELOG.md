@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.4.0
+
+Personalization.
+
+- Brand kits: `greenroom brand fetch <url>` reads a prospect's home page
+  and stores the name, tagline, primary and accent colors, logo and icon
+  under `state/_brands/<slug>/`. `brand set` edits the text and colors,
+  `brand asset` adds more images, `brand rm` deletes; `greenroom brands`
+  lists them.
+- `greenroom reset <env> --brand <slug>` fills `{{brand.*}}` placeholders
+  in steps that set `personalize`, after `${VAR}` expansion and escaped
+  for where the value lands (SQL literal, JSON, HTML, CSS, URL query).
+  Shell steps get `GREENROOM_BRAND_*` variables instead. Without a kit the
+  environment's `brand` block, or its title and the house colors, are used.
+- New `asset` step copies a kit image to a target, with a seed file as the
+  fallback.
+- Guarded link fetcher: public addresses on ports 80 and 443 only, checked
+  at connect time, no proxy, re-validated redirects, 15s and 2 MiB caps.
+  Images are typed by content; unsafe SVG is refused. Workspace
+  `linkFetch.allowPrivate` admits internal sites.
+- Stale codes `brand-changed` and `brand-missing`; runs and the applied
+  record carry the kit.
+- Portal: Brands page, Personalize for in the reset dialog, brand on the
+  applied stat, run list and run viewer.
+- API: `/api/v1/brands` and its assets, `brand` in the reset body.
+- `saas-web` writes `brand.css`, `brand.json` and the logo into the web
+  container, and its page uses them.
+
 ## 0.3.0
 
 Environment templates.

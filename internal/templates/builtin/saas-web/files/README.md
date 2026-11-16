@@ -8,6 +8,9 @@ greenroom check {{env}}
 greenroom reset {{env}}
 ```
 
+Personalize the page for a prospect with `greenroom brand fetch <url>`,
+then `greenroom reset {{env}} --brand <slug>`.
+
 | Service | Host port |
 | --- | --- |
 | Postgres | {{dbPort}} |

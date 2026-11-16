@@ -30,6 +30,7 @@ const (
 	StepHTTP    = "http"    // send an HTTP request, optionally with a body file
 	StepCopy    = "copy"    // copy a file to a target (docker, kubernetes, ssh)
 	StepWait    = "wait"    // wait for a dependency probe to pass
+	StepAsset   = "asset"   // copy a brand kit asset (logo, icon, ...) to a target
 )
 
 // Step is one unit of work in a seed set.
@@ -57,6 +58,12 @@ type Step struct {
 	Timeout         config.Duration   `json:"timeout,omitempty"`
 	ContinueOnError bool              `json:"continueOnError,omitempty"`
 	Env             map[string]string `json:"env,omitempty"`
+	// Personalize fills {{brand.*}} placeholders in the step's content with
+	// the brand chosen for the reset (sql, command, http and copy steps).
+	Personalize bool `json:"personalize,omitempty"`
+	// Asset names the brand kit asset an asset step copies; File is the
+	// fallback used when the kit has none or no brand was chosen.
+	Asset string `json:"asset,omitempty"`
 }
 
 // Check is a post-apply verification.
@@ -279,8 +286,15 @@ func (s *Set) validate() []string {
 			if st.Dependency == "" {
 				problems = append(problems, where+": wait step needs dependency")
 			}
+		case StepAsset:
+			if st.Asset == "" || st.Dest == "" || st.Target == "" {
+				problems = append(problems, where+": asset step needs asset, target and dest")
+			}
 		default:
 			problems = append(problems, fmt.Sprintf("%s: unknown kind %q", where, st.Kind))
+		}
+		if st.Personalize && (st.Kind == StepShell || st.Kind == StepWait || st.Kind == StepAsset) {
+			problems = append(problems, where+": personalize applies to sql, command, http and copy steps; shell scripts read GREENROOM_BRAND_* variables")
 		}
 		if st.File != "" {
 			if _, err := s.Resolve(st.File); err != nil {
