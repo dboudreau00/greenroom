@@ -342,6 +342,7 @@ func TestDemoBusyRetryAndPrepareNow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	clk.Set(t0.Add(91 * time.Minute)) // the first demo's slot is over
 	p, err := f.eng.PrepareDemo(other.ID, "carol")
 	if err != nil || p.Status != demos.Preparing || p.PrepRunID == "" || !strings.Contains(journalText(p), "started early by carol") {
 		t.Fatalf("prepare now: %v %+v", err, p)
@@ -458,4 +459,188 @@ func TestDemoCleanupSkippedForNextDemo(t *testing.T) {
 		t.Fatalf("second demo prep: %+v", got)
 	}
 	waitIdle(t, f, got.PrepRunID)
+}
+
+// A 14:00-14:15 is prepared at 13:30; B 14:15-15:00 opens its prep window
+// at 13:45 while A is ready and not started. B must wait for A to end and
+// then prepare late, so A goes live on its own seed set and brand.
+func TestLaterPrepWaitsForReadyDemo(t *testing.T) {
+	f, clk, t0 := demoFixture(t)
+	ctx := context.Background()
+	a, err := f.eng.BookDemo(DemoRequest{Env: "demo", Title: "A", Persona: "cfo", Version: 2, Brand: "larkspur",
+		Start: t0.Add(time.Hour), Duration: config.Duration(15 * time.Minute)}, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := f.eng.BookDemo(DemoRequest{Env: "demo", Title: "B", Persona: "cfo", Version: 1,
+		Start: t0.Add(75 * time.Minute), Duration: config.Duration(45 * time.Minute)}, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clk.Set(t0.Add(31 * time.Minute))
+	f.eng.DemoTick(ctx)
+	waitIdle(t, f, mustDemo(t, f, a.ID).PrepRunID)
+	f.eng.DemoTick(ctx)
+	if got := mustDemo(t, f, a.ID); got.Status != demos.Ready {
+		t.Fatalf("A not ready: %s\n%s", got.Status, journalText(got))
+	}
+	clk.Set(t0.Add(46 * time.Minute))
+	f.eng.DemoTick(ctx)
+	gb := mustDemo(t, f, b.ID)
+	if gb.Status != demos.Scheduled || gb.PrepRunID != "" || !strings.Contains(journalText(gb), "preparation waits: demo "+a.ID) {
+		t.Fatalf("B must wait for A: %+v\n%s", gb, journalText(gb))
+	}
+	n := len(gb.Journal)
+	f.eng.DemoTick(ctx)
+	clk.Set(t0.Add(50 * time.Minute))
+	f.eng.DemoTick(ctx)
+	if len(mustDemo(t, f, b.ID).Journal) != n {
+		t.Fatalf("the wait was journaled more than once:\n%s", journalText(mustDemo(t, f, b.ID)))
+	}
+	clk.Set(t0.Add(time.Hour))
+	f.eng.DemoTick(ctx)
+	ap, _ := f.eng.Store().LoadApplied("demo")
+	if ga := mustDemo(t, f, a.ID); ga.Status != demos.Live || ap.SetID != "cfo@v2" || ap.Brand == nil || ap.Brand.Slug != "larkspur" {
+		t.Fatalf("A live on %s brand %+v: %+v", ap.SetID, ap.Brand, ga)
+	}
+	if gb := mustDemo(t, f, b.ID); gb.Status != demos.Scheduled {
+		t.Fatalf("B moved during A: %+v", gb)
+	}
+	// 14:16: A has ended; B's start has passed, so its prep starts late.
+	clk.Set(t0.Add(76 * time.Minute))
+	f.eng.DemoTick(ctx)
+	if ga := mustDemo(t, f, a.ID); ga.Status != demos.Done {
+		t.Fatalf("A after its end: %+v", ga)
+	}
+	gb = mustDemo(t, f, b.ID)
+	if gb.Status != demos.Preparing {
+		t.Fatalf("B must prepare once A ends: %+v\n%s", gb, journalText(gb))
+	}
+	waitIdle(t, f, gb.PrepRunID)
+	f.eng.DemoTick(ctx)
+	ap, _ = f.eng.Store().LoadApplied("demo")
+	if gb := mustDemo(t, f, b.ID); gb.Status != demos.Live || ap.SetID != "cfo@v1" || ap.Brand != nil {
+		t.Fatalf("B live on %s brand %+v: %+v\n%s", ap.SetID, ap.Brand, gb, journalText(gb))
+	}
+}
+
+// A later demo with a long prep lead prepares first; when the earlier demo's
+// shorter lead begins, the earlier demo still gets its slot: its prep runs,
+// the later demo goes back to scheduled and prepares again afterwards.
+func TestEarlierDemoTakesPrecedenceOverLongerLead(t *testing.T) {
+	f, clk, t0 := demoFixture(t)
+	ctx := context.Background()
+	a, err := f.eng.BookDemo(DemoRequest{Env: "demo", Title: "A", Persona: "cfo", Version: 2, Brand: "larkspur",
+		Start: t0.Add(time.Hour), Duration: config.Duration(15 * time.Minute), PrepLead: config.Duration(5 * time.Minute)}, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := f.eng.BookDemo(DemoRequest{Env: "demo", Title: "B", Persona: "cfo", Version: 1,
+		Start: t0.Add(75 * time.Minute), Duration: config.Duration(45 * time.Minute), PrepLead: config.Duration(time.Hour)}, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clk.Set(t0.Add(16 * time.Minute))
+	f.eng.DemoTick(ctx)
+	waitIdle(t, f, mustDemo(t, f, b.ID).PrepRunID)
+	f.eng.DemoTick(ctx)
+	if gb := mustDemo(t, f, b.ID); gb.Status != demos.Ready {
+		t.Fatalf("B not ready: %s\n%s", gb.Status, journalText(gb))
+	}
+	clk.Set(t0.Add(56 * time.Minute))
+	f.eng.DemoTick(ctx)
+	ga := mustDemo(t, f, a.ID)
+	if ga.Status != demos.Preparing {
+		t.Fatalf("A must prepare over the later demo: %+v\n%s", ga, journalText(ga))
+	}
+	gb := mustDemo(t, f, b.ID)
+	if gb.Status != demos.Scheduled || gb.PrepRunID != "" || !strings.Contains(journalText(gb), "preparation undone: earlier demo "+a.ID) {
+		t.Fatalf("B must go back to scheduled: %+v\n%s", gb, journalText(gb))
+	}
+	waitIdle(t, f, ga.PrepRunID)
+	f.eng.DemoTick(ctx)
+	clk.Set(t0.Add(time.Hour))
+	f.eng.DemoTick(ctx)
+	ap, _ := f.eng.Store().LoadApplied("demo")
+	if ga := mustDemo(t, f, a.ID); ga.Status != demos.Live || ap.SetID != "cfo@v2" || ap.Brand == nil || ap.Brand.Slug != "larkspur" {
+		t.Fatalf("A live on %s brand %+v: %+v", ap.SetID, ap.Brand, ga)
+	}
+	if gb := mustDemo(t, f, b.ID); gb.Status != demos.Scheduled {
+		t.Fatalf("B moved during A: %+v\n%s", gb, journalText(gb))
+	}
+	clk.Set(t0.Add(76 * time.Minute))
+	f.eng.DemoTick(ctx)
+	gb = mustDemo(t, f, b.ID)
+	if gb.Status != demos.Preparing {
+		t.Fatalf("B must prepare again once A ends: %+v\n%s", gb, journalText(gb))
+	}
+	waitIdle(t, f, gb.PrepRunID)
+	f.eng.DemoTick(ctx)
+	ap, _ = f.eng.Store().LoadApplied("demo")
+	if gb := mustDemo(t, f, b.ID); gb.Status != demos.Live || ap.SetID != "cfo@v1" || ap.Brand != nil {
+		t.Fatalf("B live on %s brand %+v: %+v\n%s", ap.SetID, ap.Brand, gb, journalText(gb))
+	}
+}
+
+func TestPrepareNowWaitsForReadyDemo(t *testing.T) {
+	f, clk, t0 := demoFixture(t)
+	ctx := context.Background()
+	a, err := f.eng.BookDemo(DemoRequest{Env: "demo", Title: "A", Brand: "larkspur", Start: t0.Add(time.Hour), Duration: config.Duration(15 * time.Minute)}, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := f.eng.BookDemo(DemoRequest{Env: "demo", Title: "B", Start: t0.Add(3 * time.Hour), Duration: config.Duration(30 * time.Minute)}, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := f.eng.PrepareDemo(a.ID, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.eng.PrepareDemo(b.ID, "bob"); !errors.Is(err, ErrBooked) || !strings.Contains(err.Error(), a.ID) {
+		t.Fatalf("prepare now while A is preparing: %v", err)
+	}
+	waitIdle(t, f, p.PrepRunID)
+	f.eng.DemoTick(ctx)
+	if got := mustDemo(t, f, a.ID); got.Status != demos.Ready {
+		t.Fatalf("A not ready: %+v", got)
+	}
+	if _, err := f.eng.PrepareDemo(b.ID, "bob"); !errors.Is(err, ErrBooked) {
+		t.Fatalf("prepare now while A is ready: %v", err)
+	}
+	if got := mustDemo(t, f, b.ID); got.Status != demos.Scheduled || got.PrepRunID != "" {
+		t.Fatalf("B moved: %+v", got)
+	}
+	clk.Set(t0.Add(76 * time.Minute))
+	f.eng.DemoTick(ctx)
+	got, err := f.eng.PrepareDemo(b.ID, "bob")
+	if err != nil || got.Status != demos.Preparing {
+		t.Fatalf("prepare now after A ended: %v %+v", err, got)
+	}
+	waitIdle(t, f, got.PrepRunID)
+}
+
+// A demo booked on another seed set than the pin is judged against the set
+// it booked: the pin mismatch does not turn its readiness amber.
+func TestDemoReadinessUsesBookedSet(t *testing.T) {
+	f, clk, t0 := demoFixture(t)
+	ctx := context.Background()
+	d, err := f.eng.BookDemo(DemoRequest{Env: "demo", Title: "Off pin", Persona: "cfo", Version: 2,
+		Start: t0.Add(time.Hour), Duration: config.Duration(30 * time.Minute)}, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clk.Set(t0.Add(31 * time.Minute))
+	f.eng.DemoTick(ctx)
+	waitIdle(t, f, mustDemo(t, f, d.ID).PrepRunID)
+	f.eng.DemoTick(ctx)
+	got := mustDemo(t, f, d.ID)
+	if got.Status != demos.Ready || got.Readiness != Green {
+		t.Fatalf("readiness %q status %s\n%s", got.Readiness, got.Status, journalText(got))
+	}
+	// A plain check still reports the pin mismatch.
+	rep, err := f.eng.Check(ctx, "demo", CheckOptions{Drift: true})
+	if err != nil || !strings.Contains(itemCodes(rep.Stale), "wrong-version") {
+		t.Fatalf("plain check: %v %s", err, itemCodes(rep.Stale))
+	}
 }

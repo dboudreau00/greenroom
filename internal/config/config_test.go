@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -27,6 +29,28 @@ func TestExpand(t *testing.T) {
 	for in, want := range cases {
 		if got := Expand(in, lookup); got != want {
 			t.Errorf("Expand(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestExpandKnown(t *testing.T) {
+	lookup := func(k string) (string, bool) {
+		v, ok := map[string]string{"A": "1", "E": ""}[k]
+		return v, ok
+	}
+	cases := map[string]string{
+		"${A}/${n}":                        "1/${n}",
+		"${MISSING}":                       "${MISSING}",
+		"${MISSING:-def}":                  "def",
+		"${E}":                             "",
+		"${E:-d}":                          "d",
+		"$$":                               "$",
+		"for n in 1 2; do echo ${n}; done": "for n in 1 2; do echo ${n}; done",
+		"${UNCLOSED":                       "${UNCLOSED",
+	}
+	for in, want := range cases {
+		if got := ExpandKnown(in, lookup); got != want {
+			t.Errorf("ExpandKnown(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -188,5 +212,46 @@ func TestWriteJSONAtomic(t *testing.T) {
 	}
 	if _, err := os.Stat(p + ".tmp"); err == nil {
 		t.Fatal("temp file left behind")
+	}
+}
+
+// Concurrent writers of one path each use their own temp file: every write
+// lands whole and no temp file is left behind, also when the rename fails.
+func TestWriteJSONUniqueTemp(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.json")
+	var wg sync.WaitGroup
+	errs := make(chan error, 16)
+	for i := range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- WriteJSON(path, map[string]any{"n": i, "pad": strings.Repeat("x", 4096)})
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		// Windows can refuse a rename onto a file another writer is
+		// replacing at that moment; that write fails cleanly.
+		if err != nil && runtime.GOOS != "windows" {
+			t.Errorf("write: %v", err)
+		}
+	}
+	var got map[string]any
+	b, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(b, &got) != nil || len(got["pad"].(string)) != 4096 {
+		t.Fatalf("torn write: %v %.80s", err, b)
+	}
+	blocked := filepath.Join(dir, "dir.json")
+	os.MkdirAll(filepath.Join(blocked, "child"), 0o755)
+	if err := WriteJSON(blocked, 1); err == nil {
+		t.Fatal("rename onto a directory succeeded")
+	}
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("temp file left: %s", e.Name())
+		}
 	}
 }

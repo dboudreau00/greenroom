@@ -57,7 +57,9 @@ func TestCreateEnvironmentFromTemplate(t *testing.T) {
 	}
 }
 
-// Verify checks expand ${VAR} in their url and command like steps do.
+// Verify checks expand ${VAR} in their url and command like steps do, but
+// a ${VAR} that is not set and has no default stays as written, so a
+// sh -c script keeps its own variables.
 func TestVerifyExpandsVariables(t *testing.T) {
 	f := newFixture(t)
 	os.WriteFile(f.workerFile, []byte("x"), 0o644)
@@ -66,6 +68,7 @@ func TestVerifyExpandsVariables(t *testing.T) {
 		t.Fatal(err)
 	}
 	env.Env["API_URL"] = f.api.srv.URL
+	env.Env["EMPTY"] = ""
 	if err := config.WriteJSON(env.Path, env); err != nil {
 		t.Fatal(err)
 	}
@@ -74,6 +77,7 @@ func TestVerifyExpandsVariables(t *testing.T) {
 		Verify: []seeds.Check{
 			{Name: "home", Kind: "http", URL: "${API_URL}/healthz", ExpectStatus: 200},
 			{Name: "cmd", Kind: "command", Target: "local", Command: helper("echo", "${API_URL}")},
+			{Name: "shell", Kind: "command", Target: "local", Command: helper("echo", "[${n}]", "[${GREENROOM_UNSET_X}]", "[${GREENROOM_UNSET_X:-dflt}]", "[${EMPTY}]", "[${EMPTY:-e}]", "[$${API_URL}]")},
 		},
 	}, nil)
 	if err := f.eng.Reload(); err != nil {
@@ -91,6 +95,16 @@ func TestVerifyExpandsVariables(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("command verify did not see the expanded variable")
+	}
+	want := "[${n}] [${GREENROOM_UNSET_X}] [dflt] [] [e] [${API_URL}]"
+	found = false
+	for _, l := range run.Log {
+		if l.Step == "verify shell" && strings.TrimSpace(l.Text) == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("verify argv: want %q in the log:\n%+v", want, run.Log)
 	}
 }
 

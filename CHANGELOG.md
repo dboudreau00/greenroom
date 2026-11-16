@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.7.1
+
+Fixes to the 0.3.0 to 0.7.0 work.
+
+- The earlier demo on an environment keeps it: a later demo's preparation
+  waits while an earlier one is preparing, ready, prep-failed or live and
+  not over, with one journal entry naming it, and starts late once that
+  slot ends. A later demo that prepared first because of a longer lead goes
+  back to scheduled when the earlier demo's preparation runs. Prepare now
+  answers 409 while an earlier demo holds the environment. Manual resets
+  are unchanged.
+- A demo's pre-call check judges the seed set it booked, so a demo on
+  another persona than the pin is no longer amber for the pin mismatch.
+- SVG assets are checked by an XML token walk: allowlisted SVG elements by
+  namespace and local name (a prefixed `script` is caught), editor
+  metadata namespaces ignored, no entities, `on*`, `xml:base`, `src`,
+  external `href` or `url()`. The string checks stay as a second layer.
+- Dominant colors are skipped for images over 4,000,000 pixels or 8192 a
+  side, read from the header before anything is decoded.
+- Personalized file content (`copy`, `command` stdin `file`) only takes
+  `{{brand.*}}` in `.html .htm .xml .svg .json .js .mjs .css .sql`; any
+  other file type fails the step, as does an `http` body whose
+  Content-Type is not JSON, form, HTML or XML. JSON and JS escaping also
+  covers backtick and `$`.
+- Templates refuse a param that points at a link-local or cloud metadata
+  host (`169.254.0.0/16`, `fe80::/10`, `metadata.google.internal`, ...).
+- Verify checks leave a `${NAME}` that is not set and has no default as
+  written, so `sh -c` scripts keep their own variables.
+- A prep run that ends while the scheduler looks at it is read again
+  instead of reported as interrupted.
+- Stored JSON files are written through a unique temp file per write,
+  removed on failure.
+- A debrief with two new gaps of the same title and kind is refused as
+  listing the gap twice.
+- The bundled example data uses a coined customer name.
+
 ## 0.7.0
 
 Seed set authoring: compare two versions, bump to the next one.

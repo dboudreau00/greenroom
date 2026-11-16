@@ -584,7 +584,7 @@ func (e *Engine) runStep(ctx context.Context, v *Env, set *seeds.Set, st seeds.S
 				if err != nil {
 					return "", err
 				}
-				in, err := personalize(st, vals, string(b), brand.ModeForFile(st.File))
+				in, err := personalizeFile(st, vals, string(b), st.File)
 				if err != nil {
 					return "", err
 				}
@@ -626,7 +626,7 @@ func (e *Engine) runStep(ctx context.Context, v *Env, set *seeds.Set, st seeds.S
 			return "", err
 		}
 		if st.Personalize {
-			out, err := vals.Render(string(b), brand.ModeForFile(dest))
+			out, err := vals.RenderFile(string(b), dest)
 			if err != nil {
 				return "", err
 			}
@@ -675,8 +675,12 @@ func (e *Engine) httpStep(ctx context.Context, set *seeds.Set, st seeds.Step, ex
 	} else if st.Body != "" {
 		body = []byte(expand(st.Body))
 	}
-	if body != nil && st.Personalize {
-		out, err := vals.Render(string(body), bodyMode(st.Headers))
+	if body != nil && st.Personalize && bytes.Contains(body, []byte("{{")) {
+		mode, err := bodyMode(st.Headers)
+		if err != nil {
+			return "", err
+		}
+		out, err := vals.Render(string(body), mode)
 		if err != nil {
 			return "", err
 		}
@@ -788,13 +792,15 @@ func (e *Engine) runVerify(ctx context.Context, v *Env, c seeds.Check, rec *reco
 }
 
 // expand substitutes ${VAR} from the environment's env block, then the
-// process environment, as steps do.
+// process environment, as steps do. A verify check may run sh -c with its
+// own variables, so a ${VAR} that neither knows and that has no default is
+// left as written.
 func (v *Env) expand(s string) string {
-	return config.Expand(s, func(k string) string {
+	return config.ExpandKnown(s, func(k string) (string, bool) {
 		if val, ok := v.Config.Env[k]; ok {
-			return val
+			return val, true
 		}
-		return os.Getenv(k)
+		return os.LookupEnv(k)
 	})
 }
 

@@ -46,11 +46,27 @@ name. Fetching a slug that exists fails unless `--replace` is given.
 - **Images are typed by content**, never by the server's `Content-Type`
   or the file extension: PNG, JPEG, GIF, WebP, ICO or SVG, at most 1 MiB.
   Anything else is refused.
-- **SVG is refused** when it contains script, an event handler attribute,
-  a `javascript:` link, `foreignObject`, an entity declaration, SMIL `set`
-  or `animate`, embedded frames or objects, `@import`, or any `href` or
-  `url()` that is not a fragment or an inline raster image. At most
+- **SVG is parsed as XML** and refused unless it holds up token by token.
+  The root is `svg` in the SVG namespace. Elements must be on an
+  allowlist (shapes, `g`, `defs`, `symbol`, `use`, `text`, `tspan`,
+  `textPath`, gradients, `clipPath`, `mask`, `pattern`, `marker`,
+  `filter` and the `fe*` primitives, `style`, `image`, `switch`, `title`,
+  `desc`, `metadata`); `script`, `a`, `foreignObject`, `set`, `animate*`
+  and anything in the XHTML, MathML or an unknown namespace are refused.
+  Elements are matched by namespace and local name, never by prefix, so
+  `<s:script>` with `s` bound to the SVG namespace is caught. Inkscape,
+  sodipodi, RDF, Dublin Core, Creative Commons and Adobe editor metadata
+  is allowed and ignored. Also refused: entity declarations or a DTD
+  internal subset, processing instructions other than `<?xml?>`, event
+  handler attributes (`on*`), `xml:base`, `src`, any `href` that is not a
+  `#fragment` or a `data:image/(png|jpeg|gif|webp);base64` image, and in
+  any attribute or `<style>` a `url()` that is not `url(#...)`,
+  `@import`, `expression(` or `javascript:` (a CSS escape in style text
+  too). The earlier string checks still run as a second layer. At most
   256 KiB.
+- **Dominant colors** are only read from images up to 4,000,000 pixels
+  and 8192 pixels a side; the size comes from the header, so a small file
+  that would inflate to a huge bitmap is never decoded.
 - **Text is cleaned** before it is stored: control characters and
   backslashes are removed, whitespace collapsed, the name capped at 80
   characters and the tagline at 200.
@@ -135,12 +151,20 @@ the construct shown, not wrapped in your own quotes where the table says so.
 | --- | --- | --- |
 | `sql` file or inline `sql` | a complete quoted SQL literal, `'` doubled, backslashes dropped | `INSERT INTO org(name) VALUES ({{brand.name}});` |
 | `http` `url` | query-escaped | `?company={{brand.name}}` |
-| `http` `body` or `bodyFile` | by `Content-Type`: JSON string content (the default), form-urlencoded, HTML/XML escaped, anything else raw | `{"company": "{{brand.name}}"}` |
+| `http` `body` or `bodyFile` | by `Content-Type`: JSON string content (the default; backtick and `$` as `\u0060` and `\u0024` as well), form-urlencoded, HTML/XML escaped; any other type fails the step | `{"company": "{{brand.name}}"}` |
 | `http` `headers` | raw (cleaned text) | `X-Demo-For: {{brand.slug}}` |
 | `command` argv | raw: each element is one argument, no shell | `["seed-tool", "--org", "{{brand.name}}"]` |
 | `command` `file` (stdin) | by the file's extension, as for `copy` | |
-| `copy` content | by the extension of `dest`: `.html` `.htm` `.xml` `.svg` HTML-escaped, `.json` `.js` `.mjs` JSON string content, `.css` CSS string escapes, `.sql` SQL literal, anything else raw | `"name": "{{brand.name}}"` in a `.json` file |
+| `copy` content | by the extension of `dest`: `.html` `.htm` `.xml` `.svg` HTML-escaped, `.json` `.js` `.mjs` JSON string content with backtick and `$` escaped as `\u0060` and `\u0024` (safe inside a JS template literal), `.css` CSS string escapes, `.sql` SQL literal | `"name": "{{brand.name}}"` in a `.json` file |
 | `copy` `dest` | plain file names only: a value with a separator, a dot segment or a leading dot fails the step | `/srv/brand/{{brand.slug}}.json` |
+
+File content only takes placeholders in those file types. A `copy` to, or
+a `command` stdin `file` named, `.sh`, `.env`, `.yml`, `.yaml`, `.conf`,
+`.py`, `.txt`, `.md` or anything else with no escaping mode fails the step
+when the content holds a `{{brand.*}}` placeholder: a value fetched from a
+prospect's website inserted raw there could close a quote and run. Use one
+of the supported file types, or read the `GREENROOM_BRAND_*` variables
+from a script. The same content without placeholders is copied as is.
 
 `shell` steps are never templated: a script assembled from fetched text is
 too easy to get wrong. Every `shell` and `command` step gets the values as

@@ -260,3 +260,50 @@ func TestBrokenTemplateReportsProblems(t *testing.T) {
 		t.Fatal("broken template rendered")
 	}
 }
+
+// Private demo addresses are fine; link-local and cloud metadata hosts are
+// refused in any param, as a URL, host:port or bare host.
+func TestParamsRefuseMetadataHosts(t *testing.T) {
+	tpl := builtinByName(t, "warehouse-bastion")
+	ok := []map[string]string{
+		{"appUrl": "http://127.0.0.1:8080/healthz"},
+		{"appUrl": "https://10.0.4.7/healthz", "certAddress": "10.0.4.7:443"},
+		{"warehouseHost": "warehouse.internal"},
+		{"warehouseHost": "192.168.1.20"},
+		{"warehouseHost": "metadata-cache.internal"},
+	}
+	for _, p := range ok {
+		if _, err := tpl.Render(Request{Name: "wh", Params: p}); err != nil {
+			t.Errorf("%v refused: %v", p, err)
+		}
+	}
+	bad := []map[string]string{
+		{"appUrl": "http://169.254.169.254/latest/meta-data/"},
+		{"appUrl": "http://metadata.google.internal/computeMetadata/v1/"},
+		{"appUrl": "http://METADATA.Google.Internal./x"},
+		{"appUrl": "http://0xa9fea9fe/latest"},
+		{"appUrl": "http://2852039166/latest"},
+		{"appUrl": "http://0.0.0.0:8080/x"},
+		{"certAddress": "169.254.170.2:80"},
+		{"certAddress": "instance-data.ec2.internal:80"},
+		{"warehouseHost": "169.254.169.254"},
+		{"warehouseHost": "metadata"},
+		{"warehouseHost": "instance-data."},
+	}
+	for _, p := range bad {
+		_, err := tpl.Render(Request{Name: "wh", Params: p})
+		if err == nil || !strings.Contains(err.Error(), "metadata") {
+			t.Errorf("%v accepted: %v", p, err)
+		}
+	}
+	for _, v := range []string{"fe80::1", "[fe80::1%eth0]:80", "::", "fd00:ec2::254", "http://[fd00:ec2::254]/latest", "::ffff:169.254.169.254", "0.0.0.0"} {
+		if !metadataHost(v) {
+			t.Errorf("%s not caught", v)
+		}
+	}
+	for _, v := range []string{"9100", "0.9", "1.5.2", "10:30", "postgres:16", "fd00::1", "https://shop.demo.example.com/healthz", "redis://user@10.1.2.3:6379/0"} {
+		if metadataHost(v) {
+			t.Errorf("%s caught", v)
+		}
+	}
+}

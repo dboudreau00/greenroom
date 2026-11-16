@@ -60,23 +60,34 @@ func personalize(st seeds.Step, vals brand.Values, content string, mode brand.Mo
 	return vals.Render(content, mode)
 }
 
+// personalizeFile renders file content when the step opted in, escaped by
+// the file's extension.
+func personalizeFile(st seeds.Step, vals brand.Values, content, name string) (string, error) {
+	if !st.Personalize {
+		return content, nil
+	}
+	return vals.RenderFile(content, name)
+}
+
 // bodyMode picks the escaping for an http step body from its content type.
-func bodyMode(headers map[string]string) brand.Mode {
+// A type with no escaping mode is refused, like file content: a fetched
+// value is never put into a body raw.
+func bodyMode(headers map[string]string) (brand.Mode, error) {
 	for k, v := range headers {
 		if strings.EqualFold(k, "Content-Type") {
-			v = strings.ToLower(v)
+			lv := strings.ToLower(v)
 			switch {
-			case strings.Contains(v, "json"):
-				return brand.JSON
-			case strings.Contains(v, "x-www-form-urlencoded"):
-				return brand.URL
-			case strings.Contains(v, "html") || strings.Contains(v, "xml"):
-				return brand.HTML
+			case strings.Contains(lv, "json"):
+				return brand.JSON, nil
+			case strings.Contains(lv, "x-www-form-urlencoded"):
+				return brand.URL, nil
+			case strings.Contains(lv, "html") || strings.Contains(lv, "xml"):
+				return brand.HTML, nil
 			}
-			return brand.Raw
+			return brand.Raw, fmt.Errorf("personalize can not escape brand values for a %q body; use JSON, form, HTML or XML", v)
 		}
 	}
-	return brand.JSON
+	return brand.JSON, nil
 }
 
 // assetStep copies a brand kit asset to a target. Without a kit, or when

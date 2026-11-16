@@ -665,6 +665,17 @@ func (e *Environment) expand() {
 // Expand replaces ${VAR} and ${VAR:-default} using lookup. A missing variable
 // with no default expands to the empty string. $$ yields a literal $.
 func Expand(s string, lookup func(string) string) string {
+	return expandVars(s, func(k string) (string, bool) { return lookup(k), true })
+}
+
+// ExpandKnown is Expand for text that may hold the variables of another
+// program, such as a sh -c script: ${VAR} is replaced only when lookup
+// knows VAR or a default is given; anything else stays as written.
+func ExpandKnown(s string, lookup func(string) (string, bool)) string {
+	return expandVars(s, lookup)
+}
+
+func expandVars(s string, lookup func(string) (string, bool)) string {
 	if !strings.Contains(s, "$") {
 		return s
 	}
@@ -688,7 +699,12 @@ func Expand(s string, lookup func(string) string) string {
 			}
 			body := s[i+2 : i+end]
 			name, def, hasDef := strings.Cut(body, ":-")
-			v := lookup(name)
+			v, known := lookup(name)
+			if !known && !hasDef {
+				out.WriteString(s[i : i+end+1])
+				i += end
+				continue
+			}
 			if v == "" && hasDef {
 				v = def
 			}
@@ -743,19 +759,36 @@ func stripComments(b []byte) []byte {
 // StripComments is exported for the seeds package.
 func StripComments(b []byte) []byte { return stripComments(b) }
 
-// WriteJSON writes v to path atomically with a trailing newline.
+// WriteJSON writes v to path atomically with a trailing newline. The temp
+// file has a unique name in the same directory, so two writers of the same
+// path never share one, and it is removed when anything fails.
 func WriteJSON(path string, v any) error {
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
 	b = append(b, '\n')
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+	f, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	tmp := f.Name()
+	_, err = f.Write(b)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Chmod(tmp, 0o644)
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		os.Remove(tmp)
+	}
+	return err
 }

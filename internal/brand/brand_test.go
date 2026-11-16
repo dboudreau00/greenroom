@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -244,5 +245,93 @@ func TestFetchStoreAndEdit(t *testing.T) {
 	}
 	if _, err := st.Get("../etc"); err == nil {
 		t.Fatal("path escape accepted")
+	}
+}
+
+// Namespace prefixes, foreign namespaces and tricks the string checks
+// alone missed: elements are matched by namespace URI and local name.
+func TestCheckSVGTokenWalk(t *testing.T) {
+	bad := map[string]string{
+		"prefixed script":    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:s="http://www.w3.org/2000/svg"><s:script>alert(document.domain)</s:script></svg>`,
+		"xhtml script":       `<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml"><h:script>alert(1)</h:script></svg>`,
+		"animateMotion":      `<svg xmlns="http://www.w3.org/2000/svg"><a><animateMotion/></a></svg>`,
+		"set tab":            "<svg xmlns=\"http://www.w3.org/2000/svg\"><a id=\"x\"><text>x</text></a><set\tattributeName=\"href\" to=\"javascript&#58;alert(1)\" href=\"#x\"/></svg>",
+		"anchor":             `<svg xmlns="http://www.w3.org/2000/svg"><a href="#x"><text>x</text></a></svg>`,
+		"xhtml div":          `<svg xmlns="http://www.w3.org/2000/svg"><foo:div xmlns:foo="http://www.w3.org/1999/xhtml">x</foo:div></svg>`,
+		"mathml":             `<svg xmlns="http://www.w3.org/2000/svg"><m:math xmlns:m="http://www.w3.org/1998/Math/MathML"/></svg>`,
+		"unknown namespace":  `<svg xmlns="http://www.w3.org/2000/svg"><x:thing xmlns:x="urn:example"/></svg>`,
+		"undeclared prefix":  `<svg xmlns="http://www.w3.org/2000/svg"><h:iframe/></svg>`,
+		"html root":          `<html xmlns="http://www.w3.org/1999/xhtml"><svg xmlns="http://www.w3.org/2000/svg"/></html>`,
+		"svg root elsewhere": `<s:svg xmlns:s="urn:not-svg"/>`,
+		"xml:base":           `<svg xmlns="http://www.w3.org/2000/svg" xml:base="https://x.example/"><use href="#a"/></svg>`,
+		"src attribute":      `<svg xmlns="http://www.w3.org/2000/svg"><image src="https://x.example/p.png"/></svg>`,
+		"namespaced href":    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:q="urn:q"><use q:href="https://x.example/s.svg#a"/></svg>`,
+		"empty href":         `<svg xmlns="http://www.w3.org/2000/svg"><image href=""/></svg>`,
+		"encoded js href":    `<svg xmlns="http://www.w3.org/2000/svg"><use href="java&#x09;script&#58;alert(1)"/></svg>`,
+		"uppercase on":       `<svg xmlns="http://www.w3.org/2000/svg"><rect ONCLICK="x()"/></svg>`,
+		"fill url":           `<svg xmlns="http://www.w3.org/2000/svg"><rect fill="url( 'https://x.example/a.svg#g' )"/></svg>`,
+		"css escape":         `<svg xmlns="http://www.w3.org/2000/svg"><rect style="fill:u\72l(https://x.example/)"/></svg>`,
+		"style import":       `<svg xmlns="http://www.w3.org/2000/svg"><style><![CDATA[@im` + `port "x.css";]]></style></svg>`,
+		"style expression":   `<svg xmlns="http://www.w3.org/2000/svg"><style>rect{width:expression(alert(1))}</style></svg>`,
+		"entity":             `<!DOCTYPE svg [<!ENTITY ns "http://www.w3.org/2000/svg">]><svg xmlns="&ns;"/>`,
+		"internal subset":    `<!DOCTYPE svg [<!ATTLIST svg onload CDATA "x">]><svg xmlns="http://www.w3.org/2000/svg"/>`,
+		"stylesheet pi":      `<?xml-stylesheet href="https://x.example/a.css"?><svg xmlns="http://www.w3.org/2000/svg"/>`,
+		"two roots":          `<svg xmlns="http://www.w3.org/2000/svg"/><svg xmlns="http://www.w3.org/2000/svg"><s:script xmlns:s="http://www.w3.org/2000/svg"/></svg>`,
+		"not well formed":    `<svg xmlns="http://www.w3.org/2000/svg"><g></svg>`,
+	}
+	for name, svg := range bad {
+		if typ, _, err := ImageType([]byte(svg)); err == nil {
+			t.Errorf("%s: unsafe svg accepted as %s: %s", name, typ, svg)
+		}
+	}
+}
+
+// Real exports keep passing: Inkscape with sodipodi, inkscape, rdf, cc and
+// dc metadata, Illustrator with a style block and an inline PNG, and a
+// hand-written site logo using gradients, filters, symbol, use and switch.
+func TestCheckSVGRealExports(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("testdata", "svg", "*.svg"))
+	if err != nil || len(files) < 3 {
+		t.Fatalf("fixtures: %v %v", files, err)
+	}
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if typ, _, err := ImageType(b); err != nil || typ != "image/svg+xml" {
+			t.Errorf("%s refused: %s %v", f, typ, err)
+		}
+	}
+}
+
+// A 16000x16000 PNG compresses to well under MaxAssetBytes; colour
+// extraction must read the header and stop, not inflate 256 MB of pixels.
+func TestDominantColorsSkipsHugeImage(t *testing.T) {
+	const w, h = 16000, 16000
+	var buf bytes.Buffer
+	enc := png.Encoder{CompressionLevel: png.BestCompression}
+	if err := enc.Encode(&buf, image.NewGray(image.Rect(0, 0, w, h))); err != nil {
+		t.Fatal(err)
+	}
+	b := buf.Bytes()
+	if _, _, err := ImageType(b); err != nil {
+		t.Fatalf("the bomb must still be a valid asset (%d bytes): %v", len(b), err)
+	}
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	if got := DominantColors(b, 2); got != nil {
+		t.Fatalf("colors from a huge image: %v", got)
+	}
+	runtime.ReadMemStats(&after)
+	if n := after.TotalAlloc - before.TotalAlloc; n > 16<<20 {
+		t.Fatalf("DominantColors allocated %d MiB", n>>20)
+	}
+	wide := image.NewRGBA(image.Rect(0, 0, MaxColorSide+1, 1))
+	buf.Reset()
+	png.Encode(&buf, wide)
+	if got := DominantColors(buf.Bytes(), 2); got != nil {
+		t.Fatalf("colors from a too wide image: %v", got)
 	}
 }

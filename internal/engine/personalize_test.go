@@ -148,3 +148,54 @@ func TestPersonalizeTypoFailsStep(t *testing.T) {
 		t.Fatalf("typo: %v", err)
 	}
 }
+
+// File content with placeholders only renders in a file type with an
+// escaping mode: a copy to a .sh file or a .txt fed to stdin fails.
+func TestPersonalizeRawFileTypesFail(t *testing.T) {
+	f := newFixture(t)
+	os.WriteFile(f.workerFile, []byte("x"), 0o644)
+	out := filepath.ToSlash(filepath.Join(f.dir, "out"))
+	os.MkdirAll(filepath.Join(f.dir, "out"), 0o755)
+	files := map[string]string{"seed.sh": "echo {{brand.name}}\n", "input.txt": "name={{brand.name}}\n", "plain.sh": "echo hi\n"}
+	cases := map[string]seeds.Step{
+		"copy-sh":   {Name: "copy-sh", Kind: seeds.StepCopy, Target: "local", File: "seed.sh", Dest: out + "/seed.sh", Personalize: true},
+		"stdin-txt": {Name: "stdin-txt", Kind: seeds.StepCommand, Target: "local", Command: helper("echo", "x"), File: "input.txt", Personalize: true},
+	}
+	for name, st := range cases {
+		f.writeSeed(t, name, 1, seeds.Manifest{Steps: []seeds.Step{st}}, files)
+	}
+	f.writeSeed(t, "plain", 1, seeds.Manifest{Steps: []seeds.Step{
+		{Name: "copy-plain", Kind: seeds.StepCopy, Target: "local", File: "plain.sh", Dest: out + "/plain.sh", Personalize: true},
+	}}, files)
+	if err := f.eng.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	for name := range cases {
+		_, err := f.eng.Reset(context.Background(), "demo", ResetOptions{Persona: name, Actor: "test"})
+		if err == nil || !strings.Contains(err.Error(), "GREENROOM_BRAND_") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, "out", "seed.sh")); err == nil {
+		t.Fatal("seed.sh was written")
+	}
+	if _, err := f.eng.Reset(context.Background(), "demo", ResetOptions{Persona: "plain", Actor: "test"}); err != nil {
+		t.Fatalf("a .sh copy with no placeholders: %v", err)
+	}
+}
+
+func TestBodyModeRefusesUnknownTypes(t *testing.T) {
+	for ct, want := range map[string]brand.Mode{"application/json": brand.JSON, "application/x-www-form-urlencoded": brand.URL, "text/html; charset=utf-8": brand.HTML, "application/xml": brand.HTML} {
+		if m, err := bodyMode(map[string]string{"content-type": ct}); err != nil || m != want {
+			t.Errorf("%s: %v %v", ct, m, err)
+		}
+	}
+	if m, err := bodyMode(nil); err != nil || m != brand.JSON {
+		t.Errorf("default: %v %v", m, err)
+	}
+	for _, ct := range []string{"text/plain", "application/x-sh", "text/csv"} {
+		if _, err := bodyMode(map[string]string{"Content-Type": ct}); err == nil {
+			t.Errorf("%s accepted", ct)
+		}
+	}
+}

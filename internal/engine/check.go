@@ -67,6 +67,10 @@ type CheckOptions struct {
 	// Drift runs the drift queries as part of the stale report.
 	Drift bool
 	Actor string
+	// Expect is the seed set the caller deliberately applied (persona@vN),
+	// for a booked demo on another persona than the pin: when it is the
+	// applied set, the pin mismatch is not stale for this check.
+	Expect string
 }
 
 // Check runs every probe, records samples and computes readiness.
@@ -105,6 +109,9 @@ func (e *Engine) Check(ctx context.Context, envName string, opts CheckOptions) (
 		if rec != nil {
 			rec.Warn("", "stale report incomplete: %v", err)
 		}
+	}
+	if opts.Expect != "" && stale != nil && stale.Applied != nil && stale.Applied.SetID == opts.Expect {
+		stale.dropWrongVersion()
 	}
 	readiness, summary := Readiness(results, stale)
 	report := &CheckReport{Env: v.Config.Name, At: start, Duration: e.Now().Sub(start), Readiness: readiness, Summary: summary, Results: results, Stale: stale}
@@ -367,6 +374,27 @@ func (e *Engine) StaleReport(ctx context.Context, v *Env, results []probe.Result
 	}
 	rep.Fresh = rep.Stale == 0 && applied != nil
 	return rep, nil
+}
+
+// dropWrongVersion removes the pin mismatch item and recounts.
+func (r *StaleReport) dropWrongVersion() {
+	kept := r.Items[:0]
+	for _, it := range r.Items {
+		if it.Code != "wrong-version" {
+			kept = append(kept, it)
+		}
+	}
+	r.Items = kept
+	r.Stale, r.Warnings = 0, 0
+	for _, it := range r.Items {
+		switch it.Severity {
+		case "stale":
+			r.Stale++
+		case "warn":
+			r.Warnings++
+		}
+	}
+	r.Fresh = r.Stale == 0 && r.Applied != nil
 }
 
 func firstLine(s string) string {

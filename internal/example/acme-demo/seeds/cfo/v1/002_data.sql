@@ -1,6 +1,6 @@
 -- cfo@v1 data: six customers, ten orders.
 INSERT INTO customers (name, segment, country) VALUES
-  ('Northwind Traders', 'enterprise', 'US'),
+  ('Fernhollow Traders', 'enterprise', 'US'),
   ('Blue Harbor Logistics', 'mid-market', 'CA'),
   ('Kestrel Analytics', 'startup', 'GB'),
   ('Sunridge Retail', 'mid-market', 'US'),

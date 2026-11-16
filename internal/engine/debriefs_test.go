@@ -393,3 +393,27 @@ func TestNewGapWithSameTitleLinks(t *testing.T) {
 		t.Fatalf("same gap twice: %v", err)
 	}
 }
+
+// Two new gaps with the same normalized title and kind in one debrief are
+// one gap listed twice; nothing is created.
+func TestNewGapListedTwiceInOneDebrief(t *testing.T) {
+	f, _, t0 := demoFixture(t)
+	d := logDemo(t, f, "Only", "Larkspur", t0.Add(-2*time.Hour))
+	_, err := f.eng.SaveDebrief(d.ID, DebriefRequest{Rating: 3, Gaps: []DebriefGapInput{
+		newRef("feature", "high", "Scheduled exports"),
+		newRef("feature", "low", "  scheduled EXPORT "),
+	}}, "alice")
+	if err == nil || !strings.Contains(err.Error(), "gap 2") || !strings.Contains(err.Error(), "listed twice") {
+		t.Fatalf("same new gap twice: %v", err)
+	}
+	if list, _ := f.eng.Gaps().List(); len(list) != 0 {
+		t.Fatalf("%d gaps created by a refused debrief", len(list))
+	}
+	saved, err := f.eng.SaveDebrief(d.ID, DebriefRequest{Rating: 3, Gaps: []DebriefGapInput{
+		newRef("feature", "high", "Scheduled exports"),
+		newRef("integration", "low", "Scheduled exports"),
+	}}, "alice")
+	if err != nil || len(saved.Debrief.Gaps) != 2 || saved.Debrief.Gaps[0].GapID == saved.Debrief.Gaps[1].GapID {
+		t.Fatalf("same title, different kind: %v", err)
+	}
+}

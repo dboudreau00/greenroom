@@ -16,6 +16,12 @@ import (
 // MaxAssetBytes caps a stored asset.
 const MaxAssetBytes = 1 << 20
 
+// Color extraction skips images larger than this.
+const (
+	MaxColorPixels = 4_000_000
+	MaxColorSide   = 8192
+)
+
 // ImageType identifies an asset by its content, never by what the server
 // claimed: PNG, JPEG, GIF, WebP, ICO or a safe SVG. It returns the media
 // type and a file extension.
@@ -59,13 +65,18 @@ var (
 )
 
 // CheckSVG refuses SVG documents that could run script or pull in anything
-// from outside when opened: script elements, event handler attributes,
-// javascript: links, foreignObject, entity declarations, and any href or
-// url() that is not a fragment or an inline raster image. It errs on the
-// side of refusing; the fetch then tries the next logo candidate.
+// from outside when opened. The XML token walk (walkSVG) is the primary
+// check: allowlisted SVG elements only, inert editor namespaces ignored,
+// no entities, no event handlers, and no href or url() that is not a
+// fragment or an inline raster image. The string checks below are a second
+// layer. It errs on the side of refusing; the fetch then tries the next
+// logo candidate.
 func CheckSVG(b []byte) error {
 	if len(b) > 256<<10 {
 		return errors.New("svg larger than 256 KiB")
+	}
+	if err := walkSVG(b); err != nil {
+		return err
 	}
 	s := strings.ToLower(string(b))
 	for _, bad := range []string{"<script", "javascript:", "vbscript:", "<foreignobject", "<!entity", "<iframe", "<embed", "<object", "@import", "<?xml-stylesheet", "<handler", "<listener", "<set ", "<animate"} {
@@ -92,8 +103,16 @@ func CheckSVG(b []byte) error {
 
 // DominantColors returns up to n saturated colors that dominate a raster
 // image, most common first. Transparent, near-white, near-black and grey
-// pixels are ignored. SVG and formats without a stdlib decoder give none.
+// pixels are ignored. SVG and formats without a stdlib decoder give none,
+// and so does an image larger than MaxColorPixels or MaxColorSide: the
+// header is read first so a small file that inflates to a huge bitmap is
+// never decoded.
 func DominantColors(b []byte, n int) []string {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(b))
+	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > MaxColorSide || cfg.Height > MaxColorSide ||
+		cfg.Width*cfg.Height > MaxColorPixels {
+		return nil
+	}
 	img, _, err := image.Decode(bytes.NewReader(b))
 	if err != nil {
 		return nil

@@ -122,9 +122,12 @@ resource such as `deployment/db`), `instanceId` (aws through SSM). With no
 
 `${VAR}` is expanded in `url`, `headers`, `command`, `body`, `dest` and
 `env` values from the step's `env`, then the environment's `env`, then the
-process environment. Verify checks expand `url` and `command` the same way,
-from the environment's `env` and the process environment. File contents are
-used verbatim, unless the step sets `personalize`.
+process environment. Verify checks expand `url` and `command` from the
+environment's `env` and the process environment, with one difference: a
+`${NAME}` whose name is set in neither and that has no `:-default` is left
+as written, so a check such as `["sh", "-c", "for n in 1 2; do echo ${n}; done"]`
+keeps its own shell variables. `$$` is still a literal `$`. File contents
+are used verbatim, unless the step sets `personalize`.
 
 ## Verify
 

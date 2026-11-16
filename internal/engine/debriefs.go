@@ -365,6 +365,7 @@ func (e *Engine) SaveDebrief(id string, req DebriefRequest, actor string) (*demo
 	var news []pending
 	refs := []demos.GapRef{}
 	seen := map[string]bool{}
+	newSeen := map[string]int{} // kind and normalized title of new gaps -> gap number
 	for i, in := range req.Gaps {
 		n := i + 1
 		sev := strings.TrimSpace(in.Severity)
@@ -406,6 +407,13 @@ func (e *Engine) SaveDebrief(id string, req DebriefRequest, actor string) (*demo
 			g, err := e.newGap(GapRequest{Title: in.New.Title, Kind: in.New.Kind, Env: in.New.Env, Module: in.New.Module}, actor, now)
 			if err != nil {
 				return nil, fmt.Errorf("gap %d: %v", n, err)
+			}
+			if key := strings.Join(gaps.Tokens(g.Title), " "); key != "" {
+				key = g.Kind + "\x00" + key
+				if first, ok := newSeen[key]; ok {
+					return nil, fmt.Errorf("gap %d: gap %q is listed twice (as gap %d)", n, g.Title, first)
+				}
+				newSeen[key] = n
 			}
 			news = append(news, pending{len(refs), g})
 		default:

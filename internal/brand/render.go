@@ -22,7 +22,8 @@ const (
 	// not '{{brand.name}}'.
 	SQL
 	// JSON inserts the escaped content of a JSON string: write
-	// "{{brand.name}}". Also used for JavaScript files.
+	// "{{brand.name}}". Also used for JavaScript files, so backtick and
+	// dollar are escaped too and a value can not leave a template literal.
 	JSON
 	// HTML escapes for element content and quoted attributes.
 	HTML
@@ -150,7 +151,7 @@ func escape(s string, mode Mode) string {
 		return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 	case JSON:
 		b, _ := json.Marshal(s) // escapes <, > and & as well
-		return string(b[1 : len(b)-1])
+		return jsonTemplateSafe.Replace(string(b[1 : len(b)-1]))
 	case HTML:
 		return html.EscapeString(s)
 	case CSS:
@@ -169,18 +170,43 @@ func escape(s string, mode Mode) string {
 	return s
 }
 
-// ModeForFile picks the escaping for a file by the extension of where it
-// is written.
-func ModeForFile(name string) Mode {
+var jsonTemplateSafe = strings.NewReplacer("`", `\u0060`, "$", `\u0024`)
+
+// FileTypes are the extensions file content can be personalized in.
+const FileTypes = ".html, .htm, .xml, .svg, .json, .js, .mjs, .css or .sql"
+
+// ModeForFile picks the escaping for file content by the extension of
+// where it is written. ok is false for an extension with no escaping mode
+// (.sh, .env, .yml, .conf, .txt, none, ...): a value from a prospect's
+// website inserted raw there could break out of a quote.
+func ModeForFile(name string) (mode Mode, ok bool) {
 	switch strings.ToLower(path.Ext(name)) {
 	case ".html", ".htm", ".xml", ".svg":
-		return HTML
+		return HTML, true
 	case ".json", ".js", ".mjs":
-		return JSON
+		return JSON, true
 	case ".css":
-		return CSS
+		return CSS, true
 	case ".sql":
-		return SQL
+		return SQL, true
 	}
-	return Raw
+	return Raw, false
+}
+
+// RenderFile fills placeholders in the content of a file written to name,
+// escaped by its extension. Content with placeholders in a file type that
+// has no escaping mode fails the render.
+func (v Values) RenderFile(content, name string) (string, error) {
+	if !brandRe.MatchString(content) {
+		return content, nil
+	}
+	mode, ok := ModeForFile(name)
+	if !ok {
+		ext := path.Ext(name)
+		if ext == "" {
+			ext = "no extension"
+		}
+		return "", fmt.Errorf("{{brand.*}} placeholders in %s (%s): only %s files can be personalized; use one of those or read the GREENROOM_BRAND_* variables from a script", path.Base(name), ext, FileTypes)
+	}
+	return v.Render(content, mode)
 }

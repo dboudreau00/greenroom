@@ -435,20 +435,33 @@ func (e *Engine) CancelDemo(id, actor string) (*demos.Demo, error) {
 // waiting for its prep lead.
 func (e *Engine) PrepareDemo(id, actor string) (*demos.Demo, error) {
 	now := e.Now().UTC()
-	return e.demos.Update(id, func(d *demos.Demo, _ func() ([]*demos.Demo, error)) error {
+	var undo []string
+	d, err := e.demos.Update(id, func(d *demos.Demo, all func() ([]*demos.Demo, error)) error {
 		if !d.Booked || d.Status != demos.Scheduled {
 			return fmt.Errorf("%w: only a scheduled demo can be prepared (it is %s)", demos.ErrState, d.Status)
 		}
 		if !now.Before(d.End) {
 			return fmt.Errorf("%w: the slot of demo %s has ended", demos.ErrState, d.ID)
 		}
+		list, err := all()
+		if err != nil {
+			return err
+		}
+		if o := heldBy(list, d, now); o != nil {
+			return fmt.Errorf("%w: %s", ErrBooked, heldText(o))
+		}
 		runID, err := e.startPrep(d)
 		if err != nil {
 			return err
 		}
 		e.markPreparing(d, runID, now, "preparation started early by "+actor)
+		undo = laterPrepared(list, d)
 		return nil
 	})
+	if err == nil && len(undo) > 0 {
+		e.undoPreps(undo, d, now)
+	}
+	return d, err
 }
 
 // startPrep launches the demo's reset. It runs inside a store update, so
@@ -655,6 +668,13 @@ func (e *Engine) DemoTick(ctx context.Context) {
 func (e *Engine) stepDemo(ctx context.Context, id string) bool {
 	now := e.Now().UTC()
 	changed, checkRun := false, ""
+	var undo []string
+	var undoBy *demos.Demo
+	defer func() {
+		if len(undo) > 0 {
+			e.undoPreps(undo, undoBy, now)
+		}
+	}()
 	_, err := e.demos.Update(id, func(d *demos.Demo, all func() ([]*demos.Demo, error)) error {
 		sys := func(text, runID string) {
 			d.AddEntry(demos.Entry{At: now, Author: systemAuthor, Kind: "system", Text: text, RunID: runID})
@@ -667,25 +687,37 @@ func (e *Engine) stepDemo(ctx context.Context, id string) bool {
 			d.Status = demos.Missed
 			sys("missed: the slot ended before the demo was prepared (was greenroom serve running?)", "")
 		case d.Status == demos.Scheduled && !now.Before(d.Start.Add(-d.PrepLead.D())):
-			runID, err := e.startPrep(d)
-			switch {
-			case errors.Is(err, ErrBusy):
-				return demos.ErrUnchanged
-			case errors.Is(err, ErrBooked):
-				// Another demo is on stage; wait for it to end. Say so once.
-				text := "preparation waits: " + err.Error()
+			// Another demo holds the environment, or is on stage; wait for
+			// it to end. Say so once.
+			wait := func(text string) error {
+				text = "preparation waits: " + text
 				if n := len(d.Journal); n > 0 && d.Journal[n-1].Text == text {
 					return demos.ErrUnchanged
 				}
 				d.AddEntry(demos.Entry{At: now, Author: systemAuthor, Kind: "system", Text: text})
 				d.UpdatedAt = now
 				return nil
+			}
+			list, err := all()
+			if err != nil {
+				return err
+			}
+			if o := heldBy(list, d, now); o != nil {
+				return wait(heldText(o))
+			}
+			runID, err := e.startPrep(d)
+			switch {
+			case errors.Is(err, ErrBusy):
+				return demos.ErrUnchanged
+			case errors.Is(err, ErrBooked):
+				return wait(err.Error())
 			case err != nil:
 				d.Status, d.Error = demos.PrepFailed, "preparation could not start: "+err.Error()
 				sys(d.Error, "")
 			default:
 				e.markPreparing(d, runID, now, "preparing")
 				changed = true
+				undo, undoBy = laterPrepared(list, d), d
 			}
 		case d.Status == demos.Preparing:
 			ok, msg := e.prepOutcome(d.Env, d.PrepRunID)
@@ -760,6 +792,68 @@ func nextOnStage(all []*demos.Demo, d *demos.Demo, now time.Time) *demos.Demo {
 	return nil
 }
 
+// heldBy returns an earlier booked demo on the same environment that is
+// preparing, ready, prep-failed or live and whose slot has not ended: a
+// preparation of d now would reset the environment under it. Only earlier
+// demos hold the environment; a later demo that prepared first gives way
+// (see laterPrepared), so a long prep lead can not make an earlier demo
+// miss its slot.
+func heldBy(all []*demos.Demo, d *demos.Demo, now time.Time) *demos.Demo {
+	for _, o := range all {
+		if o.ID == d.ID || o.Env != d.Env || !o.Booked || !now.Before(o.End) || !o.Start.Before(d.Start) {
+			continue
+		}
+		switch o.Status {
+		case demos.Preparing, demos.Ready, demos.PrepFailed, demos.Live:
+			return o
+		}
+	}
+	return nil
+}
+
+// laterPrepared lists later booked demos on d's environment whose
+// preparation d's reset is about to overwrite.
+func laterPrepared(all []*demos.Demo, d *demos.Demo) []string {
+	var out []string
+	for _, o := range all {
+		if o.ID == d.ID || o.Env != d.Env || !o.Booked || !o.Start.After(d.Start) {
+			continue
+		}
+		switch o.Status {
+		case demos.Preparing, demos.Ready, demos.PrepFailed:
+			out = append(out, o.ID)
+		}
+	}
+	return out
+}
+
+// undoPreps sends later demos whose preparation was overwritten by an
+// earlier demo's reset back to scheduled; they prepare again once the
+// earlier demo's slot ends. It runs after the earlier demo's store update,
+// since the store lock is not reentrant.
+func (e *Engine) undoPreps(ids []string, by *demos.Demo, now time.Time) {
+	for _, id := range ids {
+		_, err := e.demos.Update(id, func(o *demos.Demo, _ func() ([]*demos.Demo, error)) error {
+			switch o.Status {
+			case demos.Preparing, demos.Ready, demos.PrepFailed:
+			default:
+				return demos.ErrUnchanged
+			}
+			o.Status, o.PrepRunID, o.CheckRunID, o.Readiness, o.Error, o.UpdatedAt = demos.Scheduled, "", "", "", "", now
+			o.AddEntry(demos.Entry{At: now, Author: systemAuthor, Kind: "system",
+				Text: fmt.Sprintf("preparation undone: earlier demo %s (%s) is preparing %s; this demo prepares again when its slot ends at %s", by.ID, by.Title, by.Env, fmtUTC(by.End))})
+			return nil
+		})
+		if err != nil {
+			e.log.Warn("undo later demo preparation", "demo", id, "err", err)
+		}
+	}
+}
+
+func heldText(o *demos.Demo) string {
+	return fmt.Sprintf("demo %s (%s) holds environment %s until %s", o.ID, o.Title, o.Env, fmtUTC(o.End))
+}
+
 // prepOutcome reports how the prep run ended; msg is empty while it runs.
 func (e *Engine) prepOutcome(env, runID string) (ok bool, msg string) {
 	if runID == "" {
@@ -777,6 +871,14 @@ func (e *Engine) prepOutcome(env, runID string) (ok bool, msg string) {
 		if active {
 			return false, ""
 		}
+		// The run may have ended between the read and the look at the
+		// active map; read it again before calling it interrupted.
+		if run, err = e.Run(env, runID); err == nil && run.Status != state.StatusRunning {
+			if run.Status == state.StatusOK {
+				return true, "ok"
+			}
+			return false, firstNonEmpty(run.Error, run.Status)
+		}
 		return false, "the preparation run was interrupted (the portal restarted while it ran)"
 	case state.StatusOK:
 		return true, "ok"
@@ -791,7 +893,7 @@ func (e *Engine) finishPrep(ctx context.Context, id, prepRun string) bool {
 	if err != nil {
 		return false
 	}
-	rep, cerr := e.Check(ctx, d.Env, CheckOptions{Record: true, Drift: true, Actor: demoActor(id)})
+	rep, cerr := e.Check(ctx, d.Env, CheckOptions{Record: true, Drift: true, Actor: demoActor(id), Expect: d.SetID()})
 	now := e.Now().UTC()
 	changed := false
 	_, err = e.demos.Update(id, func(d *demos.Demo, _ func() ([]*demos.Demo, error)) error {

@@ -476,6 +476,9 @@ func (t *Template) Render(req Request) (*Plan, error) {
 		if !regexp.MustCompile(pattern).MatchString(v) {
 			return nil, fmt.Errorf("param %s: value %q does not match %s", p.Name, v, pattern)
 		}
+		if metadataHost(v) {
+			return nil, fmt.Errorf("param %s: %q is a link-local or cloud metadata address; a demo environment can not point there", p.Name, v)
+		}
 		values[p.Name] = v
 		chosen[p.Name] = v
 	}

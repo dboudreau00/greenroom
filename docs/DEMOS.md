@@ -111,15 +111,34 @@ A portal that comes back late catches up in one pass: a demo whose start
 has passed but whose slot has not ended is prepared at once; one whose slot
 is over is marked `missed`.
 
-**Back to back demos.** When the next booking on the same environment is
-already inside its prep lead while the earlier demo is live, its
-preparation waits until the earlier one ends (one system entry says so).
-The earlier demo's cleanup is then skipped, because the next preparation
-is about to reset the environment anyway.
+**Back to back demos.** The earlier demo on an environment always has it
+first. A preparation never starts while an earlier booked demo on the same
+environment is `preparing`, `ready`, `prep-failed` or `live` and its slot
+has not ended: that would reset the environment under it. The later demo
+waits, tried again on every pass, with one system entry naming the demo it
+waits for. When the earlier demo ends after the later one's start, the
+later preparation starts late, as soon as the earlier slot is over. The
+earlier demo's cleanup is skipped once the next demo's prep lead has begun,
+because that preparation resets the environment anyway.
+
+For a demo A booked 14:00 to 14:15 and B 14:15 to 15:00, both with a 30
+minute lead: A is prepared at 13:30 and `ready`; B's lead opens at 13:45
+but B waits; A goes live at 14:00; B is prepared at 14:15 and goes live
+when its prep and check are done.
+
+A later demo with a longer lead can be prepared first. When the earlier
+demo's own lead opens, its preparation runs anyway, and the later demo goes
+back to `scheduled` with a system entry ("preparation undone") and is
+prepared again once the earlier slot ends. With B's lead at 60 minutes and
+A's at 5: B is prepared at 13:15, A at 13:55 (B back to `scheduled`), A goes
+live at 14:00, and B is prepared again at 14:15.
 
 **Prepare now** (`POST /api/v1/demos/{id}/prepare`, or the button on the
 demo page) starts the preparation of a `scheduled` demo at once, ignoring
-the prep lead.
+the prep lead. It is refused with 409 under the same rule: while another
+demo on the environment is preparing, ready, prep-failed or live and not
+over. Manual resets are not affected: they are only refused during a live
+slot, and `override` still goes ahead.
 
 Every step adds a system entry to the journal: booked, preparing, ready
 with the check summary, live, done, cleanup, missed, cancelled.
@@ -224,7 +243,7 @@ The CLI owner defaults to `GREENROOM_USER`, then `USER` or `USERNAME`.
 | GET | `/api/v1/demos/{id}` | The full record with its journal. |
 | PATCH | `/api/v1/demos/{id}` | Any of `title`, `prospect`, `owner`, `attendees`, `stage`, `outcome`, `nextStep`; while scheduled also `start`, `end`, `duration`, `persona`, `version`, `brand`, `prepLead`, `resetAfter`. 409 when the status does not allow the change or the new slot overlaps. |
 | POST | `/api/v1/demos/{id}/cancel` | Cancel. 409 when already final. |
-| POST | `/api/v1/demos/{id}/prepare` | Prepare a scheduled demo now. 202 with `{"runId":...,"demo":...}`; 409 when busy, booked by another live demo, or not scheduled. |
+| POST | `/api/v1/demos/{id}/prepare` | Prepare a scheduled demo now. 202 with `{"runId":...,"demo":...}`; 409 when busy, held by another demo that is preparing, ready, prep-failed or live and not over, or not scheduled. |
 | POST | `/api/v1/demos/{id}/journal` | Body `{"kind":"issue","text":"..."}`. 201 with the record. |
 | DELETE | `/api/v1/demos/{id}/journal/{entryId}` | Remove an entry; 409 for a system entry. |
 | GET | `/api/v1/demos.ics?env=` | The calendar. |

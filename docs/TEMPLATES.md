@@ -121,6 +121,14 @@ Values are checked before they are used:
   `. _ : / @ -` are allowed, so a value can not open a shell, SQL or YAML
   construct or reference `${VAR}`;
 - the title and owner allow letters, digits, spaces and `. , & ( ) _ + -`;
+- no param may point at a link-local or cloud metadata host: a value that
+  is a URL with a host, a `host:port` or a bare host is refused when the
+  host is in `169.254.0.0/16`, `0.0.0.0/8`, `fe80::/10`, `::` or
+  `fd00:ec2::254`, or is `metadata`, `metadata.google.internal`,
+  `instance-data` or `instance-data.ec2.internal` (any case, trailing dot
+  allowed). In a URL, numeric IPv4 forms such as `http://2852039166/` count
+  too. Private ranges (`127.0.0.1`, `10.x`, `192.168.x`, `.internal`
+  names) are fine, since demo environments live there;
 - in `.html`, `.htm`, `.xml` and `.svg` files values are HTML-escaped;
 - in `environment.json` and `seed.json` values are set as JSON strings, not
   spliced into text.
