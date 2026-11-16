@@ -123,6 +123,25 @@ greenroom demo note 20261120-1500-3f9a --kind issue "Export took 40s on the orde
 
 See [docs/DEMOS.md](docs/DEMOS.md).
 
+## Debrief, then spec the gaps
+
+After the call, a debrief records the rating, what landed, what fell flat,
+what broke in the environment, competitors, next steps, and every gap the
+prospect asked about, linked to a workspace gap registry. The gaps board
+scores each gap by the highest severity each distinct prospect gave, so the
+most requested gaps rise to the top, and exports them as a Markdown spec or
+a CSV. Typing a gap title suggests similar ones to link instead of
+duplicating; duplicates that slip through can be merged.
+
+```bash
+greenroom debriefs
+greenroom debrief 20261120-1500-3f9a --rating 4 --highlights "Billing flow landed" \
+  --gap "feature:high:Scheduled exports" --gap "environment:medium:Orders seed has no EMEA customers"
+greenroom gaps export --format md --out gaps.md
+```
+
+See [docs/DEBRIEFS.md](docs/DEBRIEFS.md).
+
 ## Five minutes to green
 
 ```bash
@@ -240,6 +259,8 @@ decorative animation turns itself off under `prefers-reduced-motion`.
 | `greenroom brands`, `brand show`, `brand set`, `brand asset`, `brand rm` | List, inspect, edit, extend and delete brand kits | |
 | `greenroom book <env> --at time --for 45m --title t` | Book a demo; the portal prepares it before the start | |
 | `greenroom demos [--past\|--all]`, `demo show`, `demo note`, `demo set`, `demo cancel`, `demo log` | Demo tracker and journal from the shell | |
+| `greenroom debrief <id> --rating 4 [--gap "kind:severity:title"]`, `debriefs [--since 30d]` | Write a demo's debrief; the queue and insights | |
+| `greenroom gaps`, `gaps show`, `gaps set`, `gaps merge`, `gaps export [--format md\|csv]` | The gaps board, edits, merges, spec export | |
 | `greenroom seeds <env>`, `envs`, `targets`, `validate` | Listings and config checks | |
 | `greenroom serve` | Portal, API and the background prober | |
 | `greenroom init` | Scaffold a workspace with the bundled example | |
@@ -266,6 +287,7 @@ run logs.
 - [docs/TEMPLATES.md](docs/TEMPLATES.md): environment templates, product modules, writing your own
 - [docs/PERSONALIZE.md](docs/PERSONALIZE.md): brand kits, the link fetcher, brand placeholders and their escaping
 - [docs/DEMOS.md](docs/DEMOS.md): booked demos, the scheduler timeline, live protection, the journal, tracker and calendar
+- [docs/DEBRIEFS.md](docs/DEBRIEFS.md): debriefs, the gap registry, scores, merging, insights, Markdown and CSV export
 - [docs/DEPLOY.md](docs/DEPLOY.md): hosting, security model, upgrades
 - [docs/API.md](docs/API.md): the HTTP API and server-sent events
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how the packages fit together

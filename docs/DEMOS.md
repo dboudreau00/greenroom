@@ -48,6 +48,7 @@ environment, whose names start with a letter or digit.
 | `readiness` | `green`, `amber` or `red`, from the pre-call check after the prep. |
 | `error` | Why the preparation failed. |
 | `journal` | Entries, oldest first. |
+| `debrief` | The look back after the demo, once it is `done`; see [DEBRIEFS.md](DEBRIEFS.md). |
 | `createdAt`, `updatedAt`, `createdBy` | Bookkeeping. |
 
 Text is cleaned before it is stored: control characters, bidirectional
@@ -166,6 +167,11 @@ A demo's page shows the status, the slot with a countdown, the environment,
 seed set and brand kit, links to the prep, check and cleanup runs, **Prepare
 now** and **Cancel demo**, the editable stage, outcome, next step, prospect
 and attendees, and the journal with a form to add entries.
+
+A demo that is done gets a **Debrief** button: rating, what landed, what
+fell flat, what broke, competitors, next steps and the gaps the prospect
+asked about. Debriefs, the gaps board, scores and the spec export are in
+[DEBRIEFS.md](DEBRIEFS.md).
 
 The overview shows the next five demos above the environment grid, and each
 environment card shows its next demo. An environment's page shows a notice

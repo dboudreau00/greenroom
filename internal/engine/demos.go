@@ -316,6 +316,9 @@ func (e *Engine) EditDemo(id string, ed DemoEdit, actor string) (*demos.Demo, er
 			}
 			if o != d.Outcome {
 				d.Outcome, changed = o, append(changed, "outcome")
+				if d.Debrief != nil {
+					d.Debrief.Outcome = o
+				}
 			}
 		}
 		schedule := ed.Start != nil || ed.End != nil || ed.Duration != nil || ed.Persona != nil || ed.Version != nil || ed.Brand != nil || ed.PrepLead != nil || ed.ResetAfter != nil

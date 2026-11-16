@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.6.0
+
+Demo debriefs and a gaps board.
+
+- Debriefs: one per demo, stored in the demo file once the demo is
+  `done`. Rating 1 to 5, what landed, what fell flat, what broke or was
+  missing in the environment, up to 10 competitors, next steps, the
+  outcome (kept in sync with the demo's) and up to 20 gaps with a severity,
+  the detail and the prospect's quote. Text is cleaned and capped; a save
+  adds a system journal entry.
+- Gap registry under `state/_gaps/<id>.json`: title, kind, status, owner,
+  notes, and for environment gaps the environment and template module,
+  which must exist. A debrief links an existing gap or creates a new one;
+  an unknown gap id fails the save and creates nothing.
+- Mentions are derived from debriefs on every read. A gap's score is the
+  sum over distinct prospects of the highest severity each gave (low 1,
+  medium 2, high 3, blocker 5), with mention count, prospects, last
+  mention, environments and personas.
+- Suggestions: typing a gap title lists similar active gaps by word
+  overlap (Jaccard, stop words removed) so people link instead of
+  duplicating. Merging a gap rewrites every debrief reference, keeps the
+  higher severity where a debrief names both, and hides the merged gap.
+- Insights for a window (default 90 days): demos waiting for a debrief,
+  average rating overall and per persona, outcomes, top gaps, gaps by kind,
+  environment gaps by environment, competitors.
+- Export: a Markdown spec (summary table, a section per kind, every
+  mention's detail and quote, escaped table cells) or a CSV (RFC 4180,
+  formula cells defused), as a dated attachment.
+- `greenroom debriefs`, `greenroom debrief <id>`, `greenroom gaps`,
+  `gaps show`, `gaps set`, `gaps merge`, `gaps export`.
+- Portal: Debriefs in the top navigation with Queue, Debriefs, Gaps and
+  Insights tabs; a gap page with mentions, edits and Merge into; a debrief
+  form with rating buttons, suggestions and environment and module pickers;
+  the debrief on the demo page; "N demos need a debrief" on the overview.
+  The top navigation scrolls inside the bar and shortens on narrow screens.
+- API: `/api/v1/debriefs`, `/api/v1/demos/{id}/debrief`, `/api/v1/gaps`
+  with `suggest`, `export`, `merge`; `debriefsPending` on the overview,
+  `debriefed` on demo short forms.
+
 ## 0.5.0
 
 Demo bookings, a demo tracker and a demo journal.

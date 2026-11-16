@@ -39,6 +39,16 @@ the portal session cookie. Responses are JSON. Errors are
 | POST | `/api/v1/demos/{id}/journal` | Body `{"kind":"note","text":"..."}`. 201 with the record. |
 | DELETE | `/api/v1/demos/{id}/journal/{entryId}` | Remove an entry; 409 for a system entry. |
 | GET | `/api/v1/demos.ics?env=` | RFC 5545 calendar of booked demos that are not cancelled. |
+| GET | `/api/v1/debriefs?since=90d` | Demos waiting for a debrief, submitted debriefs and insights for the window. `since` takes `30d`, `720h`, `all`, a date or RFC 3339. |
+| GET | `/api/v1/demos/{id}/debrief` | The demo's debrief (or `null`) with the gaps it references. |
+| PUT | `/api/v1/demos/{id}/debrief` | Write the debrief. Each gap is `{"gapId":...}` or `{"new":{"title","kind","env","module"}}` with `severity`, `detail`, `quote`. 400 for bad input or an unknown gap, 404 for an unknown demo, 409 when the demo is not done. |
+| GET | `/api/v1/gaps?status=&kind=&env=&includeMerged=` | The gaps board with derived scores, mentions, prospects and last mention. |
+| POST | `/api/v1/gaps` | Create a gap. 201. |
+| GET | `/api/v1/gaps/suggest?q=` | Similar active gaps, to link instead of duplicating. |
+| GET | `/api/v1/gaps/export?format=md\|csv&status=` | Markdown spec or CSV, as a dated attachment. |
+| GET | `/api/v1/gaps/{id}` | One gap with its stats, mentions and the gaps merged into it. |
+| PATCH | `/api/v1/gaps/{id}` | Edit title, kind, status, owner, notes, env, module. 409 for a merged gap. |
+| POST | `/api/v1/gaps/{id}/merge` | Body `{"into":"gap-..."}`. Rewrites every debrief reference. 409 when either side is merged. |
 
 Mutating requests made with the session cookie must also send
 `X-Requested-With: greenroom`. Bearer requests do not.
@@ -68,7 +78,9 @@ curl -N -H "Authorization: Bearer $TOKEN" \
 
 Brand kit links go through the guarded link fetcher; see
 [PERSONALIZE.md](PERSONALIZE.md). Demo fields, statuses and the scheduler
-are in [DEMOS.md](DEMOS.md).
+are in [DEMOS.md](DEMOS.md); debriefs, gaps, scores and the export formats
+in [DEBRIEFS.md](DEBRIEFS.md). The overview carries `debriefsPending`, the
+demos of the last 90 days waiting for a debrief.
 
 Book a demo and pull the calendar:
 

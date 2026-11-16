@@ -158,6 +158,13 @@
   }
   function setNav(which) {
     Array.prototype.forEach.call(document.querySelectorAll('#topnav a'), function (a) { a.classList.toggle('active', a.getAttribute('data-nav') === which); });
+    // On a narrow bar the nav scrolls; keep the active section in view.
+    var nav = document.getElementById('topnav'), act = nav.querySelector('a.active');
+    if (act && nav.scrollWidth > nav.clientWidth) {
+      var left = act.offsetLeft - nav.offsetLeft, right = left + act.offsetWidth;
+      if (left < nav.scrollLeft) nav.scrollLeft = Math.max(0, left - 8);
+      else if (right > nav.scrollLeft + nav.clientWidth) nav.scrollLeft = right - nav.clientWidth + 8;
+    }
   }
   function setCrumbs(parts) {
     crumbs.innerHTML = parts.map(function (p) {
@@ -210,6 +217,10 @@
           '<header class="page-head rise"><div><h1>Demo environments</h1><div class="sub">' + envs.length + ' environment' + (envs.length === 1 ? '' : 's') + ' in <span class="mono dim">' + esc(data.environmentsDir) + '</span>, probed every <span class="mono dim">' + esc(data.probeInterval) + '</span></div></div>' +
           '<div class="actions"><button class="btn primary" id="act-new"><span>New environment</span></button></div></header>';
         if (data.loadError) html += '<div class="alert rise">' + I.alert + '<div><b>Some environments failed to load</b><span class="small dim mono">' + esc(data.loadError) + '</span></div></div>';
+        if (data.debriefsPending > 0) {
+          html += '<div class="alert info rise">' + I.info + '<div><b>' + esc(plural(data.debriefsPending, 'demo') + (data.debriefsPending === 1 ? ' needs' : ' need') + ' a debrief') + '</b>' +
+            '<a href="#/debriefs" class="small">Open the debrief queue</a></div></div>';
+        }
         if (!envs.length) {
           html += '<div class="card empty rise" style="margin-top:24px"><span class="icon-tile">' + I.folder + '</span><h2>No environments yet</h2><p>Start from a template with the product modules you want to show, or run <span class="mono dim">greenroom init</span> for the bundled example.</p></div>';
         } else {
@@ -640,7 +651,8 @@
       '<div class="tpl-line"><a class="mono" href="#/env/' + esc(d.env) + '">' + esc(d.env) + '</a>' + setChip(d) + brandChip(d, kits) +
       (d.prospect ? '<span class="dim">' + esc(d.prospect) + '</span>' : '') + (d.readiness ? readinessBadge(d.readiness) : '') + (d.outcome ? outcomeChip(d.outcome) : '') + '</div>' +
       (runs.length ? '<div class="run-links small">' + runs.map(function (r) { return '<a href="#/env/' + esc(d.env) + '/run/' + esc(d[r[0]]) + '">' + esc(r[1]) + '</a>'; }).join('') + '</div>' : '') + '</div>' +
-      '<div class="actions">' + (d.booked && d.status === 'scheduled' ? '<button class="btn" id="act-prepare"><span>Prepare now</span></button>' : '') +
+      '<div class="actions">' + (d.status === 'done' && !d.debrief ? '<a class="btn primary" href="#/demos/' + esc(d.id) + '/debrief"><span>Debrief</span></a>' : '') +
+      (d.booked && d.status === 'scheduled' ? '<button class="btn" id="act-prepare"><span>Prepare now</span></button>' : '') +
       (demoFinal(d.status) ? '' : '<button class="btn ghost" id="act-cancel"><span>Cancel demo</span></button>') + '</div>';
   }
   function demoNoticesHtml(d) {
@@ -692,7 +704,7 @@
     envView = null;
     setCrumbs([{ label: 'Demos', href: '#/demos' }, { label: id }]);
     app.innerHTML = '<div class="spotlight"></div><div class="page"><div class="skel" style="width:280px;height:22px"></div><div class="skel" style="width:380px;height:12px;margin-top:10px"></div></div>';
-    var st = { d: null, kits: {} };
+    var st = { d: null, kits: {}, dbGaps: {} };
     var url = '/api/v1/demos/' + encodeURIComponent(id);
     var wireJournal = function () {
       Array.prototype.forEach.call(app.querySelectorAll('[data-entry-rm]'), function (b) {
@@ -734,6 +746,7 @@
       if (full) {
         app.innerHTML = '<div class="spotlight"></div><div class="page">' +
           '<header class="demo-head rise" id="demo-head">' + demoHeadHtml(d, st.kits) + '</header><div id="demo-notices">' + demoNoticesHtml(d) + '</div>' +
+          '<div id="demo-debrief">' + debriefCardHtml(d, st.dbGaps) + '</div>' +
           '<div class="demo-grid"><section class="card pad rise" style="animation-delay:40ms"><h3>Journal <span class="muted num small" id="je-total">' + (d.journal || []).length + '</span></h3>' +
           '<form class="entry-form" id="je-form" autocomplete="off"><div class="row"><label class="sr-only" for="je-kind">Kind</label><select id="je-kind" class="select small-select">' +
           DEMO_KINDS.map(function (k) { return '<option value="' + k + '">' + k + '</option>'; }).join('') + '</select><span class="xs muted num" id="je-count">0 / 4000</span></div>' +
@@ -779,7 +792,7 @@
           .catch(function (e) { toast('Not saved', 'error', e.message); b.disabled = false; b.innerHTML = '<span>Save</span>'; });
       });
     };
-    Promise.all([api(url), loadKits()]).then(function (r) { st.kits = r[1]; show(r[0], true); })
+    Promise.all([api(url), loadKits(), api(url + '/debrief').catch(function () { return null; })]).then(function (r) { st.kits = r[1]; st.dbGaps = r[2] ? r[2].gaps : {}; show(r[0], true); })
       .catch(function (e) { app.innerHTML = '<div class="alert">' + I.alert + '<div><b>Could not load the demo</b>' + esc(e.message) + '</div></div>'; });
     timer = setInterval(function () {
       if (!st.d || (demoFinal(st.d.status) && st.d.cleanup !== 'pending')) return;
@@ -887,8 +900,590 @@
     return '<div class="stagger"><section class="card table-wrap" style="--i:0">' + head + demoTable(list, {}, false) + '</section></div>';
   }
 
+  // ---------- debriefs and gaps ----------
+  var GAP_KINDS = ['feature', 'data', 'integration', 'environment', 'content', 'performance', 'security', 'other'];
+  var GAP_STATUSES = ['open', 'planned', 'in-progress', 'done', 'wont-do'];
+  var GAP_SEVERITIES = ['low', 'medium', 'high', 'blocker'];
+  var DEBRIEF_TABS = [['queue', 'Queue'], ['debriefs', 'Debriefs'], ['gaps', 'Gaps'], ['insights', 'Insights']];
+  var SINCE_CHOICES = [['30d', 'Last 30 days'], ['90d', 'Last 90 days'], ['180d', 'Last 180 days'], ['365d', 'Last year'], ['all', 'All time']];
+  var debriefSince = '90d';
+  var gapFilter = { kind: '', status: '', env: '', merged: false };
+  var gapSort = 'score';
+  var debriefView = null;
+  var arrowDown = svg('<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>', 11);
+
+  // optionList renders options from values or [value, label] pairs, with an
+  // optional empty first option.
+  function optionList(list, cur, empty) {
+    return (empty != null ? '<option value="">' + esc(empty) + '</option>' : '') + list.map(function (o) {
+      var v = Array.isArray(o) ? o[0] : o, l = Array.isArray(o) ? o[1] : o;
+      return '<option value="' + esc(v) + '"' + (v === cur ? ' selected' : '') + '>' + esc(l) + '</option>';
+    }).join('');
+  }
+  function plural(n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); }
+  function gapStatusBadge(st) {
+    var map = { open: 'blue', planned: 'amber', 'in-progress': 'green', done: 'grey', 'wont-do': 'grey' };
+    return badge(map[st] || 'grey', st, { dot: st === 'in-progress' });
+  }
+  function severityChip(s) { return chip({ low: 'grey', medium: 'blue', high: 'amber', blocker: 'red' }[s] || 'grey', s); }
+  function gapKindChip(k) { return chip(k === 'environment' ? 'green' : 'grey', k); }
+  function ratingDots(n) {
+    var html = '<span class="rating" role="img" aria-label="' + esc('rated ' + n + ' of 5') + '">';
+    for (var i = 1; i <= 5; i++) html += '<i' + (i <= n ? ' class="on"' : '') + '></i>';
+    return html + '<span class="num small dim">' + esc(n) + '/5</span></span>';
+  }
+  function dateOnly(iso) { var d = new Date(iso); return isNaN(d.getTime()) || d.getFullYear() < 2000 ? '' : d.toLocaleDateString(); }
+  // bars draws a list of horizontal CSS bars. Each label is HTML the caller
+  // has already escaped.
+  function bars(items, cls) {
+    if (!items.length) return '<p class="small muted" style="margin-top:10px">Nothing yet.</p>';
+    var max = items.reduce(function (m, it) { return Math.max(m, it.value); }, 0) || 1;
+    return '<ul class="bars">' + items.map(function (it, i) {
+      var w = it.value ? Math.max(2, Math.round(it.value / (it.max || max) * 100)) : 0;
+      return '<li><div class="bar-head"><span class="bar-label">' + it.label + '</span><span class="num small">' + esc(it.text != null ? it.text : it.value) + '</span></div>' +
+        '<div class="bar-track"><i class="' + esc(cls || '') + '" style="width:' + w + '%;--i:' + i + '"></i></div></li>';
+    }).join('') + '</ul>';
+  }
+  // envModuleFields is the environment and template module pickers of an
+  // environment gap.
+  function envModuleFields(prefix, env, module, envs, disabled) {
+    var e = envs.filter(function (x) { return x.name === env; })[0];
+    var mods = (e && e.template && e.template.modules) || [];
+    var opts = envs.map(function (x) { return [x.name, x.title || x.name]; });
+    if (env && !e) opts.push([env, env + ' (not loaded)']);
+    var dis = disabled ? ' disabled' : '';
+    return '<div class="fields"><div class="field"><label for="' + esc(prefix) + '-env">Environment</label><select id="' + esc(prefix) + '-env" data-k="env"' + dis + '>' + optionList(opts, env, 'No environment') + '</select></div>' +
+      '<div class="field"><label for="' + esc(prefix) + '-module">Module</label><select id="' + esc(prefix) + '-module" data-k="module"' + (mods.length && !disabled ? '' : ' disabled') + '>' +
+      (mods.length ? optionList(mods, module, 'Whole environment') : '<option value="">' + esc(env ? 'No template modules' : 'Pick an environment') + '</option>') + '</select></div></div>';
+  }
+
+  function debriefCardHtml(d, gm) {
+    var db = d.debrief;
+    if (!db) return '';
+    gm = gm || {};
+    var block = function (label, text) { return text ? '<div><h4>' + esc(label) + '</h4><p>' + esc(text) + '</p></div>' : ''; };
+    var cols = block('What landed', db.highlights) + block('What fell flat', db.lowlights) + block('Environment', db.environmentNotes) + block('Next steps', db.nextSteps);
+    var refs = (db.gaps || []).map(function (r) {
+      var g = gm[r.gapId];
+      return '<li><div class="ref-head">' + severityChip(r.severity) + '<a href="#/gaps/' + esc(r.gapId) + '">' + esc(g ? g.title : r.gapId) + '</a>' + (g ? gapKindChip(g.kind) + gapStatusBadge(g.status) : '') + '</div>' +
+        (r.detail ? '<div class="mention-text">' + esc(r.detail) + '</div>' : '') + (r.quote ? '<blockquote class="quote">' + esc(r.quote) + '</blockquote>' : '') + '</li>';
+    }).join('');
+    var by = 'by ' + (db.submittedBy || 'unknown') + ', ' + ago(db.submittedAt) + (db.updatedAt && db.updatedAt !== db.submittedAt ? ', updated ' + ago(db.updatedAt) : '');
+    return '<section class="card pad debrief-card rise" style="animation-delay:20ms"><div class="db-head"><h3>Debrief</h3>' + ratingDots(db.rating) + (db.outcome ? outcomeChip(db.outcome) : '') +
+      '<span class="xs muted">' + esc(by) + '</span><span class="spacer"></span><a class="btn small ghost" href="#/demos/' + esc(d.id) + '/debrief"><span>Edit debrief</span></a></div>' +
+      (cols ? '<div class="debrief-cols">' + cols + '</div>' : '') +
+      ((db.competitors || []).length ? '<div class="tpl-line"><span class="muted">Competitors</span>' + db.competitors.map(function (c) { return chip('amber', c); }).join('') + '</div>' : '') +
+      (refs ? '<h4 style="margin-top:16px">Gaps</h4><ul class="gap-refs">' + refs + '</ul>' : '') + '</section>';
+  }
+
+  function gapQuery() {
+    var q = [];
+    if (gapFilter.status) q.push('status=' + encodeURIComponent(gapFilter.status));
+    if (gapFilter.kind) q.push('kind=' + encodeURIComponent(gapFilter.kind));
+    if (gapFilter.env) q.push('env=' + encodeURIComponent(gapFilter.env));
+    if (gapFilter.merged) q.push('includeMerged=true');
+    return q.length ? '?' + q.join('&') : '';
+  }
+  function debriefSub(v) {
+    var d = v.data;
+    return esc(d.pending.length + ' waiting, ' + d.submitted.length + ' submitted, ' + (dateOnly(d.since) ? 'demos since ' + dateOnly(d.since) : 'every demo'));
+  }
+  function debriefTabs(v) {
+    var counts = { queue: v.data.pending.length, debriefs: v.data.submitted.length, gaps: v.rows.length };
+    return '<div class="tabs"><div class="list">' + DEBRIEF_TABS.map(function (t) {
+      return '<a href="#/debriefs/' + t[0] + '" data-tab="' + t[0] + '" class="' + (t[0] === v.tab ? 'active' : '') + '">' + t[1] +
+        (counts[t[0]] != null ? '<span class="count">' + esc(counts[t[0]]) + '</span>' : '') + '</a>';
+    }).join('') + '<span class="tab-indicator"></span></div></div>';
+  }
+  function setTabCount(tab, n) {
+    var c = app.querySelector('.tabs a[data-tab="' + tab + '"] .count');
+    if (c) c.textContent = n;
+  }
+
+  function renderDebriefs(tab) {
+    if (!DEBRIEF_TABS.some(function (t) { return t[0] === tab; })) tab = 'queue';
+    if (debriefView && debriefView.data && app.querySelector('#db-panel')) {
+      debriefView.tab = tab;
+      Array.prototype.forEach.call(app.querySelectorAll('.tabs a'), function (a) { a.classList.toggle('active', a.getAttribute('data-tab') === tab); });
+      positionIndicator(true);
+      renderDebriefPanel(true);
+      return;
+    }
+    stopLive();
+    envView = null;
+    var v = debriefView = { tab: tab, data: null, rows: [], kits: {}, envs: [], sig: '' };
+    setCrumbs([{ label: 'Debriefs' }]);
+    app.innerHTML = '<div class="spotlight"></div><div class="page"><header class="rise"><h1>Debriefs</h1><div class="skel" style="width:300px;height:12px;margin-top:10px"></div></header></div>';
+    loadDebriefs(v, true).catch(function (e) { if (debriefView === v) app.innerHTML = '<div class="alert">' + I.alert + '<div><b>Could not load debriefs</b>' + esc(e.message) + '</div></div>'; });
+    timer = setInterval(function () { if (!document.getElementById('modal-root').innerHTML) loadDebriefs(v, false).catch(function () {}); }, 30000);
+  }
+  function loadDebriefs(v, first) {
+    return Promise.all([api('/api/v1/debriefs?since=' + encodeURIComponent(debriefSince)), api('/api/v1/gaps' + gapQuery()), loadKits(),
+      api('/api/v1/overview').catch(function () { return { environments: [] }; })]).then(function (r) {
+      if (debriefView !== v || location.hash.indexOf('debriefs') < 0) return;
+      var sig = JSON.stringify([r[0], r[1]]);
+      if (!first && sig === v.sig && app.querySelector('#db-panel')) return;
+      v.sig = sig; v.data = r[0]; v.rows = r[1] || []; v.kits = r[2]; v.envs = r[3].environments || [];
+      if (first || !app.querySelector('#db-panel')) {
+        app.innerHTML = '<div class="spotlight"></div><div class="page"><header class="page-head rise"><div><h1>Debriefs</h1><div class="sub" id="db-sub">' + debriefSub(v) + '</div></div>' +
+          '<div class="actions"><label class="sr-only" for="db-since">Window</label><select id="db-since" class="select">' + optionList(SINCE_CHOICES, debriefSince) + '</select></div></header>' +
+          debriefTabs(v) + '<div class="panel" id="db-panel"></div></div>';
+        document.getElementById('db-since').addEventListener('change', function (ev) {
+          debriefSince = ev.target.value;
+          loadDebriefs(v, false).catch(function (e) { toast('Could not load debriefs', 'error', e.message); });
+        });
+        positionIndicator(false);
+        renderDebriefPanel(true);
+      } else {
+        document.getElementById('db-sub').innerHTML = debriefSub(v);
+        setTabCount('queue', v.data.pending.length);
+        setTabCount('debriefs', v.data.submitted.length);
+        setTabCount('gaps', v.rows.length);
+        renderDebriefPanel(false);
+      }
+    });
+  }
+  function renderDebriefPanel(animate) {
+    var v = debriefView, panel = document.getElementById('db-panel');
+    if (!panel || !v || !v.data) return;
+    var html = v.tab === 'debriefs' ? submittedPanel(v) : v.tab === 'gaps' ? gapsPanel(v) : v.tab === 'insights' ? insightsPanel(v) : queuePanel(v);
+    panel.className = 'panel ' + (animate ? 'rise' : 'static');
+    panel.innerHTML = html;
+    if (v.tab === 'insights' && animate) countUp(panel);
+    if (v.tab === 'gaps') wireGapsPanel(v);
+  }
+
+  function queuePanel(v) {
+    var list = v.data.pending;
+    if (!list.length) return '<div class="card empty"><span class="icon-tile">' + I.check + '</span><h2>Nothing waiting</h2><p>Every demo that is done in this window has a debrief.</p></div>';
+    return '<div class="stagger"><section class="card table-wrap" style="--i:0"><div class="scroll"><table class="demo-table" style="min-width:880px"><thead><tr><th>When</th><th>Demo</th><th>Prospect</th><th>Environment</th><th>Seed set</th><th>Outcome</th><th class="num">Debrief</th></tr></thead><tbody>' +
+      list.map(function (b, i) {
+        return '<tr style="--i:' + i + '"><td class="nowrap"><div class="small">' + esc(slotText(b)) + '</div><div class="xs muted">' + esc(ago(b.end || b.start)) + '</div></td>' +
+          '<td><a href="#/demos/' + esc(b.id) + '" class="demo-title">' + esc(b.title) + '</a>' + (b.booked ? '' : ' ' + chip('grey', 'logged')) +
+          '<div class="xs muted">' + esc(b.stage) + (b.owner ? ', ' + esc(b.owner) : '') + '</div></td>' +
+          '<td>' + prospectCell(b, v.kits) + '</td><td><a class="mono small" href="#/env/' + esc(b.env) + '">' + esc(b.env) + '</a></td><td>' + setChip(b) + '</td><td>' + outcomeChip(b.outcome) + '</td>' +
+          '<td class="num"><a class="btn small primary" href="#/demos/' + esc(b.id) + '/debrief"><span>Debrief</span></a></td></tr>';
+      }).join('') + '</tbody></table></div></section></div>';
+  }
+
+  function submittedPanel(v) {
+    var list = v.data.submitted;
+    if (!list.length) return '<div class="card empty"><span class="icon-tile">' + I.folder + '</span><h2>No debriefs yet</h2><p>A debrief opens once a demo is done; the queue lists the ones waiting.</p></div>';
+    return '<div class="stagger"><section class="card table-wrap" style="--i:0"><div class="scroll"><table class="demo-table" style="min-width:880px"><thead><tr><th>Submitted</th><th>Demo</th><th>Prospect</th><th>Rating</th><th>Outcome</th><th class="num">Gaps</th><th class="num"></th></tr></thead><tbody>' +
+      list.map(function (b, i) {
+        return '<tr style="--i:' + i + '"><td class="nowrap"><div class="small" title="' + esc(when(b.submittedAt)) + '">' + esc(ago(b.submittedAt)) + '</div><div class="xs muted">' + esc(b.submittedBy || '') + '</div></td>' +
+          '<td><a href="#/demos/' + esc(b.id) + '" class="demo-title">' + esc(b.title) + '</a><div class="xs muted">' + esc(slotText(b)) + ' on ' + esc(b.env) + '</div></td>' +
+          '<td>' + prospectCell(b, v.kits) + '</td><td class="nowrap">' + ratingDots(b.rating) + '</td><td>' + outcomeChip(b.outcome) + '</td><td class="num">' + esc(b.gaps) + '</td>' +
+          '<td class="num"><a class="btn small ghost" href="#/demos/' + esc(b.id) + '/debrief"><span>Edit</span></a></td></tr>';
+      }).join('') + '</tbody></table></div></section></div>';
+  }
+
+  function sortedRows(rows) {
+    var key = {
+      mentions: function (r) { return r.mentions; },
+      prospects: function (r) { return r.prospects; },
+      last: function (r) { return r.lastMentioned ? new Date(r.lastMentioned).getTime() : 0; }
+    }[gapSort] || function (r) { return r.score; };
+    return rows.slice().sort(function (a, b) { return key(b) - key(a); });
+  }
+  function gapsPanel(v) {
+    var envs = v.envs.map(function (e) { return [e.name, e.title || e.name]; });
+    if (gapFilter.env && !envs.some(function (e) { return e[0] === gapFilter.env; })) envs.push([gapFilter.env, gapFilter.env]);
+    var exp = function (fmt) { return '/api/v1/gaps/export?format=' + fmt + (gapFilter.status ? '&status=' + encodeURIComponent(gapFilter.status) : ''); };
+    var html = '<div class="demo-filters" style="margin-top:0">' +
+      '<label class="sr-only" for="gf-kind">Kind</label><select id="gf-kind" class="select">' + optionList(GAP_KINDS, gapFilter.kind, 'All kinds') + '</select>' +
+      '<label class="sr-only" for="gf-status">Status</label><select id="gf-status" class="select">' + optionList([['active', 'Open, planned, in progress']].concat(GAP_STATUSES), gapFilter.status, 'All statuses') + '</select>' +
+      '<label class="sr-only" for="gf-env">Environment</label><select id="gf-env" class="select">' + optionList(envs, gapFilter.env, 'All environments') + '</select>' +
+      '<label class="check-row"><input type="checkbox" id="gf-merged"' + (gapFilter.merged ? ' checked' : '') + '> Show merged</label><span class="spacer"></span>' +
+      '<a class="btn small ghost" href="' + esc(exp('md')) + '" download><span>Export .md</span></a><a class="btn small ghost" href="' + esc(exp('csv')) + '" download><span>Export .csv</span></a></div>';
+    if (!v.rows.length) {
+      return html + '<div class="card empty rise" style="margin-top:16px"><span class="icon-tile">' + I.folder + '</span><h2>No gaps here</h2><p>Gaps come from debriefs: what a prospect asked for that the product or the demo environment does not have.</p></div>';
+    }
+    var th = function (k, label) {
+      var on = gapSort === k;
+      return '<th class="num"' + (on ? ' aria-sort="descending"' : '') + '><button type="button" class="th-sort' + (on ? ' active' : '') + '" data-sort="' + k + '">' + esc(label) + arrowDown + '</button></th>';
+    };
+    return html + '<div class="stagger" style="margin-top:16px"><section class="card table-wrap" style="--i:0"><div class="scroll"><table class="gap-table" style="min-width:1000px"><thead><tr><th style="width:32%">Gap</th><th>Kind</th><th>Status</th>' +
+      th('score', 'Score') + th('prospects', 'Prospects') + th('mentions', 'Mentions') + th('last', 'Last mentioned') + '<th>Environments</th></tr></thead><tbody>' +
+      sortedRows(v.rows).map(function (r, i) {
+        return '<tr style="--i:' + i + '" data-gap="' + esc(r.id) + '"><td><a class="gap-title" href="#/gaps/' + esc(r.id) + '">' + esc(r.title) + '</a>' +
+          '<div class="xs muted"><span class="mono">' + esc(r.id) + '</span>' + (r.owner ? ', ' + esc(r.owner) : '') + (r.mergedInto ? ', merged into <span class="mono">' + esc(r.mergedInto) + '</span>' : '') + '</div></td>' +
+          '<td>' + gapKindChip(r.kind) + '</td><td>' + gapStatusBadge(r.status) + '</td>' +
+          '<td class="num"><b class="score">' + esc(r.score) + '</b>' + (r.topSeverity ? '<div>' + severityChip(r.topSeverity) + '</div>' : '') + '</td>' +
+          '<td class="num">' + esc(r.prospects) + '</td><td class="num">' + esc(r.mentions) + '</td>' +
+          '<td class="num nowrap small">' + (r.lastMentioned ? '<span title="' + esc(when(r.lastMentioned)) + '">' + esc(dayLabel(r.lastMentioned)) + '</span>' : '<span class="muted">never</span>') + '</td>' +
+          '<td><div class="tpl-line" style="margin-top:0">' + (r.env ? chip('green', r.env + (r.module ? '/' + r.module : '')) : '') +
+          (r.environments || []).map(function (e) { return '<span class="mono xs dim">' + esc(e) + '</span>'; }).join('') + '</div></td></tr>';
+      }).join('') + '</tbody></table></div></section></div>';
+  }
+  function wireGapsPanel(v) {
+    var panel = document.getElementById('db-panel');
+    var reload = function () {
+      api('/api/v1/gaps' + gapQuery()).then(function (rows) {
+        if (debriefView !== v) return;
+        v.rows = rows || [];
+        setTabCount('gaps', v.rows.length);
+        renderDebriefPanel(false);
+      }).catch(function (e) { toast('Could not load gaps', 'error', e.message); });
+    };
+    ['kind', 'status', 'env'].forEach(function (k) {
+      var el = document.getElementById('gf-' + k);
+      el.addEventListener('change', function () { gapFilter[k] = el.value; reload(); });
+    });
+    document.getElementById('gf-merged').addEventListener('change', function (ev) { gapFilter.merged = ev.target.checked; reload(); });
+    Array.prototype.forEach.call(panel.querySelectorAll('[data-sort]'), function (b) {
+      b.addEventListener('click', function () { gapSort = b.getAttribute('data-sort'); renderDebriefPanel(false); });
+    });
+    Array.prototype.forEach.call(panel.querySelectorAll('tr[data-gap]'), function (tr) {
+      tr.addEventListener('click', function (ev) { if (!ev.target.closest('a, button')) location.hash = '#/gaps/' + tr.getAttribute('data-gap'); });
+    });
+  }
+
+  function insightsPanel(v) {
+    var ins = v.data.insights;
+    var card = function (i, title, body) { return '<section class="card pad" style="--i:' + i + '"><h3>' + esc(title) + '</h3>' + body + '</section>'; };
+    var stats = '<div class="stats stagger" style="margin-top:0">' +
+      stat(0, 'Waiting', '', 'demos without a debrief', ins.pending ? 'amber' : '', { v: ins.pending }) +
+      stat(1, 'Debriefs', '', dateOnly(ins.since) ? 'since ' + dateOnly(ins.since) : 'all time', '', { v: ins.submitted }) +
+      stat(2, 'Average rating', '', 'out of 5', ins.averageRating >= 4 ? 'green' : '', { v: ins.averageRating, d: 2 }) +
+      stat(3, 'Gaps mentioned', '', plural(ins.mentions, 'mention'), '', { v: ins.gapsMentioned }) +
+      stat(4, 'Competitors', '', 'named in debriefs', '', { v: ins.competitors.length }) + '</div>';
+    var top = ins.topGaps.map(function (r) {
+      return { label: '<a href="#/gaps/' + esc(r.id) + '">' + esc(r.title) + '</a>', value: r.score, text: r.score + ', ' + plural(r.prospects, 'prospect') };
+    });
+    var persona = ins.ratingByPersona.map(function (g) {
+      return { label: '<span class="mono">' + esc(g.persona) + '</span> <span class="xs muted">' + esc(plural(g.count, 'debrief')) + '</span>', value: g.average, max: 5, text: g.average.toFixed(2) };
+    });
+    var outcomes = ins.submitted ? DEMO_OUTCOMES.map(function (o) { return { label: outcomeChip(o), value: ins.outcomes[o] || 0 }; }) : [];
+    var kinds = GAP_KINDS.filter(function (k) { return ins.gapsByKind[k]; }).map(function (k) { return { label: gapKindChip(k), value: ins.gapsByKind[k] }; });
+    var envg = ins.environmentGaps.map(function (c) {
+      return { label: '<a class="mono" href="#/env/' + esc(c.env) + '">' + esc(c.env) + '</a>', value: c.mentions, text: plural(c.gaps, 'gap') + ', ' + plural(c.mentions, 'mention') };
+    });
+    var comp = ins.competitors.map(function (c) { return { label: esc(c.name), value: c.count }; });
+    return stats + '<div class="insight-grid stagger">' + card(0, 'Top gaps by score', bars(top)) + card(1, 'Rating by persona', bars(persona)) +
+      card(2, 'Outcomes', bars(outcomes, 'blue')) + card(3, 'Gaps by kind', bars(kinds, 'blue')) + card(4, 'Environment gaps', bars(envg, 'amber')) +
+      card(5, 'Competitors mentioned', bars(comp, 'amber')) + '</div>';
+  }
+
+  // ---------- gap detail ----------
+  function mentionsHtml(list, kits) {
+    if (!list.length) return '<p class="small muted" style="margin-top:10px">No debrief mentions this gap yet.</p>';
+    return '<ul class="mention-list">' + list.map(function (m) {
+      var k = m.brand && kits[m.brand];
+      return '<li><div class="mention-head">' + (k ? kitLogo(k, 22) : '') + '<b>' + esc(m.prospect || 'No prospect') + '</b>' + severityChip(m.severity) +
+        '<a href="#/demos/' + esc(m.demo) + '">' + esc(m.title) + '</a><span class="xs muted" title="' + esc(when(m.start)) + '">' + esc(dayLabel(m.start)) + '</span>' +
+        '<a class="mono xs" href="#/env/' + esc(m.env) + '">' + esc(m.env) + '</a>' + (m.persona ? chip('blue', m.persona) : '') + '</div>' +
+        (m.detail ? '<div class="mention-text">' + esc(m.detail) + '</div>' : '') + (m.quote ? '<blockquote class="quote">' + esc(m.quote) + '</blockquote>' : '') + '</li>';
+    }).join('') + '</ul>';
+  }
+  function gapEditHtml(g, envs) {
+    var merged = !!g.mergedInto, dis = merged ? ' disabled' : '';
+    return '<h3>Details</h3><form id="ge-form" autocomplete="off" novalidate>' +
+      '<div class="field"><label for="ge-title">Title</label><input type="text" id="ge-title" maxlength="120" value="' + esc(g.title) + '"' + dis + '></div>' +
+      '<div class="fields"><div class="field"><label for="ge-kind">Kind</label><select id="ge-kind"' + dis + '>' + optionList(GAP_KINDS, g.kind) + '</select></div>' +
+      '<div class="field"><label for="ge-status">Status</label><select id="ge-status"' + dis + '>' + optionList(GAP_STATUSES, g.status) + '</select></div></div>' +
+      '<div id="ge-envs"' + (g.kind === 'environment' ? '' : ' hidden') + '>' + envModuleFields('ge', g.env || '', g.module || '', envs, merged) + '</div>' +
+      '<div class="field"><label for="ge-owner">Owner</label><input type="text" id="ge-owner" maxlength="80" value="' + esc(g.owner || '') + '" placeholder="product, solutions, a name"' + dis + '></div>' +
+      '<div class="field"><label for="ge-notes">Notes</label><textarea id="ge-notes" rows="5" maxlength="4000"' + dis + '>' + esc(g.notes || '') + '</textarea></div>' +
+      '<div id="ge-error"></div>' +
+      (merged ? '' : '<div class="actions" style="margin-top:12px"><button class="btn primary" type="submit" id="ge-save"><span>Save</span></button></div>') + '</form>' +
+      '<dl class="kv" style="margin-top:16px"><div><dt>Created</dt><dd class="small">' + esc(when(g.createdAt)) + (g.createdBy ? ' by ' + esc(g.createdBy) : '') + '</dd></div>' +
+      '<div><dt>Updated</dt><dd class="small">' + esc(ago(g.updatedAt)) + '</dd></div><div><dt>Id</dt><dd class="mono small">' + esc(g.id) + '</dd></div></dl>';
+  }
+  function formError(el, msg) {
+    el.innerHTML = '<div class="alert">' + I.alert + '<div><b>Not saved</b><span class="small">' + esc(msg) + '</span></div></div>';
+    el.scrollIntoView({ block: 'nearest', behavior: reduceMotion ? 'auto' : 'smooth' });
+  }
+
+  function renderGap(id) {
+    stopLive();
+    envView = null;
+    setCrumbs([{ label: 'Debriefs', href: '#/debriefs' }, { label: 'Gaps', href: '#/debriefs/gaps' }, { label: id }]);
+    app.innerHTML = '<div class="spotlight"></div><div class="page"><div class="skel" style="width:280px;height:22px"></div><div class="skel" style="width:380px;height:12px;margin-top:10px"></div></div>';
+    var url = '/api/v1/gaps/' + encodeURIComponent(id);
+    var st = { v: null, envs: [], kits: {} };
+    var show = function () {
+      var v = st.v, g = v.gap, merged = !!g.mergedInto;
+      setCrumbs([{ label: 'Debriefs', href: '#/debriefs' }, { label: 'Gaps', href: '#/debriefs/gaps' }, { label: g.title }]);
+      var line = 'Score ' + g.score + ' from ' + plural(g.prospects, 'prospect') + ', ' + plural(g.mentions, 'mention') + ', last mentioned ' + (g.lastMentioned ? ago(g.lastMentioned) : 'never');
+      app.innerHTML = '<div class="spotlight"></div><div class="page"><header class="demo-head rise"><div class="titles"><h1><span>' + esc(g.title) + '</span>' + gapStatusBadge(g.status) + gapKindChip(g.kind) + '</h1>' +
+        '<p>' + esc(line) + '</p><div class="tpl-line"><span class="mono xs muted">' + esc(g.id) + '</span>' +
+        (g.env ? '<a class="mono" href="#/env/' + esc(g.env) + '">' + esc(g.env) + '</a>' + (g.module ? chip('green', g.module) : '') : '') +
+        (g.personas || []).map(function (p) { return chip('blue', p); }).join('') + '</div></div>' +
+        '<div class="actions">' + (merged ? '' : '<button class="btn" id="act-merge"><span>Merge into...</span></button>') + '</div></header>' +
+        (merged ? '<div class="alert info rise">' + I.info + '<div><b>Merged into <a href="#/gaps/' + esc(g.mergedInto) + '">' + esc(g.mergedInto) + '</a></b><span class="small">Its mentions count there now; a merged gap can not be edited.</span></div></div>' : '') +
+        (v.mergedFrom.length ? '<p class="small muted" style="margin-top:12px">Merged in: ' + v.mergedFrom.map(function (m) { return '<a class="mono" href="#/gaps/' + esc(m) + '">' + esc(m) + '</a>'; }).join(', ') + '</p>' : '') +
+        '<div class="stats stagger">' + stat(0, 'Score', '', 'highest severity per prospect', 'green', { v: g.score }) + stat(1, 'Prospects', '', 'distinct', '', { v: g.prospects }) +
+        stat(2, 'Mentions', '', 'in debriefs', '', { v: g.mentions }) +
+        stat(3, 'Top severity', g.topSeverity ? severityChip(g.topSeverity) : '<span class="muted">none</span>', (g.environments || []).join(', ') || 'not demoed yet') + '</div>' +
+        '<div class="demo-grid"><section class="card pad rise" style="animation-delay:40ms"><h3>Mentions <span class="muted num small">' + esc(v.mentions.length) + '</span></h3>' + mentionsHtml(v.mentions, st.kits) + '</section>' +
+        '<aside class="card pad rise" style="animation-delay:80ms" id="gap-edit">' + gapEditHtml(g, st.envs) + '</aside></div></div>';
+      countUp(app);
+      wire();
+    };
+    var reload = function () { return api(url).then(function (v) { st.v = v; show(); }); };
+    var wire = function () {
+      var g = st.v.gap, form = document.getElementById('ge-form');
+      var kind = document.getElementById('ge-kind'), envs = document.getElementById('ge-envs');
+      kind.addEventListener('change', function () { envs.hidden = kind.value !== 'environment'; });
+      envs.addEventListener('change', function (ev) {
+        if (ev.target.getAttribute('data-k') === 'env') envs.innerHTML = envModuleFields('ge', ev.target.value, '', st.envs, false);
+      });
+      form.addEventListener('submit', function (ev) {
+        ev.preventDefault();
+        var go = document.getElementById('ge-save'), err = document.getElementById('ge-error');
+        if (!go) return;
+        var isEnv = kind.value === 'environment';
+        err.innerHTML = '';
+        busy(go, 'Saving');
+        api(url, { method: 'PATCH', body: { title: document.getElementById('ge-title').value, kind: kind.value, status: document.getElementById('ge-status').value,
+          owner: document.getElementById('ge-owner').value, notes: document.getElementById('ge-notes').value,
+          env: isEnv ? document.getElementById('ge-env').value : '', module: isEnv ? document.getElementById('ge-module').value : '' } })
+          .then(function () { toast('Gap saved', 'ok', g.id); return reload(); })
+          .catch(function (e) { formError(err, e.message); go.disabled = false; go.innerHTML = '<span>Save</span>'; });
+      });
+      var mb = document.getElementById('act-merge');
+      if (mb) mb.addEventListener('click', function () { mergeDialog(g, url); });
+    };
+    Promise.all([api(url), api('/api/v1/overview').catch(function () { return { environments: [] }; }), loadKits()]).then(function (r) {
+      if (location.hash.indexOf('gaps/') < 0) return;
+      st.v = r[0]; st.envs = r[1].environments || []; st.kits = r[2];
+      show();
+    }).catch(function (e) { app.innerHTML = '<div class="alert">' + I.alert + '<div><b>Could not load the gap</b>' + esc(e.message) + '</div></div>'; });
+  }
+  function mergeDialog(g, url) {
+    api('/api/v1/gaps').then(function (rows) {
+      var others = (rows || []).filter(function (r) { return r.id !== g.id && !r.mergedInto; })
+        .sort(function (a, b) { return a.title.localeCompare(b.title); });
+      if (!others.length) { toast('No other gap to merge into', 'error'); return; }
+      modal({
+        width: 520,
+        title: '<h2>Merge ' + esc(g.title) + '</h2>',
+        body: '<p class="lead">Every debrief that names this gap is rewritten to name the one you pick; where a debrief names both, the higher severity stays. This gap becomes wont-do and leaves the board.</p>' +
+          '<div class="field"><label for="gm-into">Merge into</label><select id="gm-into">' + optionList(others.map(function (r) { return [r.id, r.title + ' (' + r.kind + ', score ' + r.score + ')']; }), '') + '</select></div>',
+        footer: '<button class="btn ghost" data-close><span>Cancel</span></button><button class="btn danger" id="gm-go"><span>Merge</span></button>'
+      }, function (root, close) {
+        root.querySelector('#gm-go').addEventListener('click', function () {
+          var into = root.querySelector('#gm-into').value;
+          busy(root.querySelector('#gm-go'), 'Merging');
+          api(url + '/merge', { method: 'POST', body: { into: into } }).then(function (r) {
+            close();
+            toast('Gap merged', 'ok', plural(r.demos, 'debrief') + ' rewritten');
+            location.hash = '#/gaps/' + into;
+          }).catch(function (e) { close(); toast('Not merged', 'error', e.message); });
+        });
+      });
+    }).catch(function (e) { toast('Could not load gaps', 'error', e.message); });
+  }
+
+  // ---------- debrief form ----------
+  function renderDebriefForm(id) {
+    stopLive();
+    envView = null;
+    setCrumbs([{ label: 'Demos', href: '#/demos' }, { label: id, href: '#/demos/' + id }, { label: 'Debrief' }]);
+    app.innerHTML = '<div class="spotlight"></div><div class="page"><div class="skel" style="width:280px;height:22px"></div><div class="skel" style="width:380px;height:12px;margin-top:10px"></div></div>';
+    var url = '/api/v1/demos/' + encodeURIComponent(id) + '/debrief';
+    Promise.all([api(url), api('/api/v1/overview').catch(function () { return { environments: [] }; }), loadKits()]).then(function (r) {
+      if (location.hash.indexOf('/debrief') < 0) return;
+      debriefForm(url, r[0], r[1].environments || [], r[2]);
+    }).catch(function (e) { app.innerHTML = '<div class="alert">' + I.alert + '<div><b>Could not load the demo</b>' + esc(e.message) + '</div></div>'; });
+  }
+  function debriefForm(url, view, envs, kits) {
+    var d = view.demo, db = view.debrief, seq = 0;
+    var st = { rating: db ? db.rating : 0, rows: [] };
+    var newRow = function (o) {
+      o = o || {};
+      return { key: ++seq, gapId: o.gapId || '', title: o.title || '', kind: o.kind || '', status: o.status || '', newTitle: o.newTitle || '', newKind: o.newKind || 'feature',
+        env: o.env != null ? o.env : d.env, module: o.module || '', severity: o.severity || 'medium', detail: o.detail || '', quote: o.quote || '', sugg: [], searched: false, q: 0, timer: null, fresh: !!o.fresh };
+    };
+    if (db) {
+      (db.gaps || []).forEach(function (g) {
+        var gap = view.gaps[g.gapId] || {};
+        st.rows.push(newRow({ gapId: g.gapId, title: gap.title || g.gapId, kind: gap.kind, status: gap.status, severity: g.severity, detail: g.detail, quote: g.quote }));
+      });
+    }
+    setCrumbs([{ label: 'Demos', href: '#/demos' }, { label: d.title, href: '#/demos/' + d.id }, { label: 'Debrief' }]);
+    var head = '<header class="demo-head rise"><div class="titles"><h1><span>' + esc((db ? 'Edit debrief: ' : 'Debrief: ') + d.title) + '</span>' + demoBadge(d.status) + '</h1>' +
+      '<p>' + esc(slotText(d)) + '</p><div class="tpl-line"><a class="mono" href="#/env/' + esc(d.env) + '">' + esc(d.env) + '</a>' + setChip(d) + brandChip(d, kits) +
+      (d.prospect ? '<span class="dim">' + esc(d.prospect) + '</span>' : '') + '</div></div>' +
+      '<div class="actions"><a class="btn ghost" href="#/demos/' + esc(d.id) + '"><span>Back to the demo</span></a></div></header>';
+    if (d.status !== 'done') {
+      app.innerHTML = '<div class="spotlight"></div><div class="page">' + head + '<div class="alert info rise">' + I.info + '<div><b>Not done yet</b><span class="small">' +
+        esc('This demo is ' + d.status + '; its debrief opens once it is done.') + '</span></div></div></div>';
+      return;
+    }
+    var val = function (k) { return db ? db[k] || '' : ''; };
+    var ta = function (fid, key, label, ph) {
+      return '<div class="field"><label for="' + fid + '">' + esc(label) + '</label><textarea id="' + fid + '" rows="4" maxlength="4000" placeholder="' + esc(ph) + '">' + esc(val(key)) + '</textarea></div>';
+    };
+    var rateButtons = function () {
+      var h = '';
+      for (var i = 1; i <= 5; i++) {
+        h += '<button type="button" class="rate-btn' + (i <= st.rating ? ' on' : '') + (i === st.rating ? ' current' : '') + '" role="radio" aria-checked="' + (i === st.rating) + '" data-rate="' + i + '" aria-label="' + i + ' of 5">' + i + '</button>';
+      }
+      return h;
+    };
+    app.innerHTML = '<div class="spotlight"></div><div class="page">' + head +
+      '<form class="card pad debrief-form rise" id="db-form" autocomplete="off" novalidate style="animation-delay:40ms">' +
+      '<div class="fields"><div class="field" style="margin-top:0"><span class="label" id="db-rating-label">Rating</span><div class="rate-pick" role="radiogroup" aria-labelledby="db-rating-label" id="db-rating">' + rateButtons() + '</div></div>' +
+      '<div class="field" style="margin-top:0"><label for="db-outcome">Outcome</label><select id="db-outcome">' + optionList(DEMO_OUTCOMES, (db && db.outcome) || d.outcome || '', 'Not set') + '</select></div></div>' +
+      '<div class="fields">' + ta('db-high', 'highlights', 'What landed', 'The parts that got a reaction') + ta('db-low', 'lowlights', 'What fell flat', 'Where attention dropped') + '</div>' +
+      '<div class="fields">' + ta('db-envn', 'environmentNotes', 'What broke or was missing in the environment', 'Slow pages, missing data, errors on stage') + ta('db-next', 'nextSteps', 'Next steps', 'What was agreed') + '</div>' +
+      '<div class="field"><label for="db-comp">Competitors <span class="muted">(comma separated)</span></label><input type="text" id="db-comp" maxlength="700" value="' + esc(db ? (db.competitors || []).join(', ') : '') + '" placeholder="Quillmark, Brightloom"></div>' +
+      '<div class="gaps-head"><h3>Gaps <span class="muted num small" id="db-gap-count"></span></h3><button class="btn small" type="button" id="db-add-gap"><span>Add a gap</span></button></div>' +
+      '<p class="small muted" style="margin-top:4px">What they asked for that the product or the demo environment does not have. Type a title and link a similar gap when one shows up.</p>' +
+      '<div class="gap-rows" id="db-gaps"></div><div id="db-error"></div>' +
+      '<div class="actions form-actions"><a class="btn ghost" href="#/demos/' + esc(d.id) + '"><span>Cancel</span></a><button class="btn primary" type="submit" id="db-save"><span>' + (db ? 'Save debrief' : 'Submit debrief') + '</span></button></div></form></div>';
+
+    var rowsEl = document.getElementById('db-gaps'), errEl = document.getElementById('db-error');
+    var rowByKey = function (k) { return st.rows.filter(function (r) { return r.key === k; })[0]; };
+    var suggHtml = function (r) {
+      if (r.gapId || !r.newTitle.trim()) return '';
+      if (!r.sugg.length) return r.searched ? '<span class="xs muted">No similar gap yet; this one will be created.</span>' : '';
+      return '<span class="xs muted">Similar gaps; link one instead of adding a duplicate:</span>' + r.sugg.map(function (s) {
+        return '<button type="button" class="sugg-item" data-link="' + esc(s.id) + '"><b>' + esc(s.title) + '</b>' + gapKindChip(s.kind) + gapStatusBadge(s.status) +
+          '<span class="xs muted num">' + esc(Math.round(s.score * 100) + '% match') + '</span></button>';
+      }).join('');
+    };
+    var rowHtml = function (r, i) {
+      var p = 'gr-' + r.key;
+      var sev = '<div class="field"><label for="' + p + '-sev">Severity</label><select id="' + p + '-sev" data-k="severity">' + optionList(GAP_SEVERITIES, r.severity) + '</select></div>';
+      var top = r.gapId
+        ? '<div class="gap-linked">' + I.check + '<span><b>' + esc(r.title) + '</b>' + (r.kind ? gapKindChip(r.kind) : '') + (r.status ? gapStatusBadge(r.status) : '') +
+          '<a class="xs mono" href="#/gaps/' + esc(r.gapId) + '">' + esc(r.gapId) + '</a></span><button type="button" class="btn small ghost" data-unlink><span>Unlink</span></button></div>' +
+          '<div class="fields">' + sev + '<div></div></div>'
+        : '<div class="field" style="margin-top:0"><label for="' + p + '-title">Title</label><input type="text" id="' + p + '-title" data-k="newTitle" maxlength="120" value="' + esc(r.newTitle) + '" placeholder="What they asked for, in a few words"></div>' +
+          '<div class="sugg" aria-live="polite">' + suggHtml(r) + '</div>' +
+          '<div class="fields"><div class="field"><label for="' + p + '-kind">Kind</label><select id="' + p + '-kind" data-k="newKind">' + optionList(GAP_KINDS, r.newKind) + '</select></div>' + sev + '</div>' +
+          (r.newKind === 'environment' ? envModuleFields(p, r.env, r.module, envs, false) : '');
+      return '<div class="gap-row' + (r.fresh ? ' fresh' : '') + '" data-row="' + r.key + '"><div class="gap-row-head"><span class="xs muted">' + esc((r.gapId ? 'Linked gap ' : 'New gap ') + (i + 1)) + '</span>' +
+        '<button type="button" class="btn small ghost" data-remove aria-label="' + esc('Remove gap ' + (i + 1)) + '"><span>Remove</span></button></div>' + top +
+        '<div class="fields"><div class="field"><label for="' + p + '-detail">What exactly they asked</label><textarea id="' + p + '-detail" data-k="detail" rows="2" maxlength="1000">' + esc(r.detail) + '</textarea></div>' +
+        '<div class="field"><label for="' + p + '-quote">In their words <span class="muted">(optional)</span></label><textarea id="' + p + '-quote" data-k="quote" rows="2" maxlength="1000">' + esc(r.quote) + '</textarea></div></div></div>';
+    };
+    var drawRows = function () {
+      rowsEl.innerHTML = st.rows.length ? st.rows.map(rowHtml).join('') : '<p class="small muted">No gaps recorded.</p>';
+      st.rows.forEach(function (r) { r.fresh = false; });
+      document.getElementById('db-gap-count').textContent = st.rows.length || '';
+    };
+    var sync = function () {
+      Array.prototype.forEach.call(rowsEl.querySelectorAll('[data-row]'), function (el) {
+        var r = rowByKey(+el.getAttribute('data-row'));
+        if (!r) return;
+        Array.prototype.forEach.call(el.querySelectorAll('[data-k]'), function (inp) { r[inp.getAttribute('data-k')] = inp.value; });
+      });
+    };
+    drawRows();
+
+    document.getElementById('db-rating').addEventListener('click', function (ev) {
+      var b = ev.target.closest('[data-rate]');
+      if (!b) return;
+      st.rating = +b.getAttribute('data-rate');
+      this.innerHTML = rateButtons();
+      var cur = this.querySelector('.current');
+      if (cur) cur.focus();
+    });
+    document.getElementById('db-add-gap').addEventListener('click', function () {
+      sync();
+      st.rows.push(newRow({ fresh: true }));
+      drawRows();
+      var inputs = rowsEl.querySelectorAll('[data-k="newTitle"]');
+      if (inputs.length) inputs[inputs.length - 1].focus();
+    });
+    rowsEl.addEventListener('input', function (ev) {
+      var t = ev.target;
+      if (t.getAttribute('data-k') !== 'newTitle') return;
+      var r = rowByKey(+t.closest('[data-row]').getAttribute('data-row'));
+      if (!r) return;
+      r.newTitle = t.value;
+      clearTimeout(r.timer);
+      var q = t.value.trim();
+      var box = function () { return rowsEl.querySelector('[data-row="' + r.key + '"] .sugg'); };
+      if (!q) { r.sugg = []; r.searched = false; r.q++; if (box()) box().innerHTML = ''; return; }
+      r.timer = setTimeout(function () {
+        var n = ++r.q;
+        api('/api/v1/gaps/suggest?q=' + encodeURIComponent(q)).then(function (list) {
+          if (n !== r.q || st.rows.indexOf(r) < 0 || r.gapId) return;
+          r.sugg = (list || []).filter(function (s) { return !st.rows.some(function (o) { return o.gapId === s.id; }); });
+          r.searched = true;
+          if (box()) box().innerHTML = suggHtml(r);
+        }).catch(function () {});
+      }, 250);
+    });
+    rowsEl.addEventListener('change', function (ev) {
+      var k = ev.target.getAttribute('data-k');
+      if (k !== 'newKind' && k !== 'env') return;
+      sync();
+      if (k === 'env') {
+        var r = rowByKey(+ev.target.closest('[data-row]').getAttribute('data-row'));
+        if (r) r.module = '';
+      }
+      drawRows();
+    });
+    rowsEl.addEventListener('click', function (ev) {
+      var b = ev.target.closest('button');
+      var el = b && b.closest('[data-row]');
+      if (!el) return;
+      var r = rowByKey(+el.getAttribute('data-row'));
+      if (!r) return;
+      sync();
+      if (b.hasAttribute('data-remove')) {
+        clearTimeout(r.timer);
+        st.rows.splice(st.rows.indexOf(r), 1);
+        drawRows();
+      } else if (b.hasAttribute('data-unlink')) {
+        r.newTitle = r.title; r.newKind = r.kind || 'feature'; r.gapId = ''; r.title = ''; r.kind = ''; r.status = ''; r.sugg = []; r.searched = false;
+        drawRows();
+        var t = rowsEl.querySelector('[data-row="' + r.key + '"] [data-k="newTitle"]');
+        if (t) t.focus();
+      } else if (b.hasAttribute('data-link')) {
+        var s = r.sugg.filter(function (x) { return x.id === b.getAttribute('data-link'); })[0];
+        if (!s) return;
+        if (st.rows.some(function (o) { return o !== r && o.gapId === s.id; })) { formError(errEl, 'That gap is already in this debrief.'); return; }
+        clearTimeout(r.timer);
+        r.q++;
+        r.gapId = s.id; r.title = s.title; r.kind = s.kind; r.status = s.status; r.sugg = [];
+        drawRows();
+      }
+    });
+    // Enter in a one-line field must not submit the whole debrief.
+    document.getElementById('db-form').addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter' && ev.target.tagName === 'INPUT') ev.preventDefault();
+    });
+    document.getElementById('db-form').addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      sync();
+      errEl.innerHTML = '';
+      if (!st.rating) { formError(errEl, 'Pick a rating from 1 to 5.'); return; }
+      var out = [], problem = '';
+      st.rows.forEach(function (r, i) {
+        if (problem) return;
+        var g = { severity: r.severity, detail: r.detail, quote: r.quote };
+        if (r.gapId) { g.gapId = r.gapId; out.push(g); return; }
+        if (!r.newTitle.trim()) {
+          if (r.detail.trim() || r.quote.trim()) problem = 'Gap ' + (i + 1) + ' needs a title, or a link to an existing gap.';
+          return;
+        }
+        var isEnv = r.newKind === 'environment';
+        g['new'] = { title: r.newTitle, kind: r.newKind, env: isEnv ? r.env : '', module: isEnv ? r.module : '' };
+        out.push(g);
+      });
+      if (problem) { formError(errEl, problem); return; }
+      var go = document.getElementById('db-save');
+      busy(go, 'Saving');
+      api(url, { method: 'PUT', body: {
+        rating: st.rating, outcome: document.getElementById('db-outcome').value,
+        highlights: document.getElementById('db-high').value, lowlights: document.getElementById('db-low').value,
+        environmentNotes: document.getElementById('db-envn').value, nextSteps: document.getElementById('db-next').value,
+        competitors: document.getElementById('db-comp').value.split(',').map(function (s) { return s.trim(); }).filter(Boolean),
+        gaps: out } })
+        .then(function () { toast(db ? 'Debrief updated' : 'Debrief submitted', 'ok', d.title); location.hash = '#/demos/' + d.id; })
+        .catch(function (e) { formError(errEl, e.message); go.disabled = false; go.innerHTML = '<span>' + (db ? 'Save debrief' : 'Submit debrief') + '</span>'; });
+    });
+  }
+
   // ---------- environment ----------
-  var TABS = [['deps', 'Dependencies'], ['seeds', 'Seed sets'], ['stale', 'Stale'], ['runs', 'Runs'], ['demos', 'Demos'], ['targets', 'Targets']];
+  var TABS =[['deps', 'Dependencies'], ['seeds', 'Seed sets'], ['stale', 'Stale'], ['runs', 'Runs'], ['demos', 'Demos'], ['targets', 'Targets']];
   function tabCounts(d) {
     return { deps: d.deps, seeds: d.seeds.length, stale: d.stale ? d.stale.items.length : 0, runs: d.runs.length, demos: (d.demos || []).length, targets: d.targets.length };
   }
@@ -1331,9 +1926,14 @@
   function route() {
     var h = location.hash.replace(/^#\/?/, '');
     var parts = h.split('/').filter(Boolean).map(decodeURIComponent);
-    setNav(parts[0] === 'brands' ? 'brands' : parts[0] === 'demos' ? 'demos' : 'envs');
+    var top = parts[0], isDebriefForm = top === 'demos' && parts[1] && parts[2] === 'debrief';
+    setNav(top === 'brands' ? 'brands' : top === 'debriefs' || top === 'gaps' || isDebriefForm ? 'debriefs' : top === 'demos' ? 'demos' : 'envs');
     var go = function (fn) { try { fn(); } catch (e) { app.innerHTML = '<div class="alert">' + I.alert + '<div><b>Error</b>' + esc(e.message) + '</div></div>'; } };
-    if (parts[0] === 'brands') return go(renderBrands);
+    if (top === 'brands') return go(renderBrands);
+    if (top === 'debriefs') return go(function () { renderDebriefs(parts[1]); });
+    if (top === 'gaps' && !parts[1]) { location.replace('#/debriefs/gaps'); return; }
+    if (top === 'gaps') return go(function () { renderGap(parts[1]); });
+    if (isDebriefForm) return go(function () { renderDebriefForm(parts[1]); });
     if (parts[0] === 'demos') return go(parts[1] ? function () { renderDemo(parts[1]); } : renderDemos);
     if (parts[0] === 'env' && parts[1]) {
       if (parts[2] === 'run' && parts[3]) return go(function () { renderRun(parts[1], parts[3]); });

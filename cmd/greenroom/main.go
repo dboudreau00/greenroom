@@ -54,6 +54,9 @@ Commands:
   book        book a demo on an environment; the portal prepares it before the start
   demos       list upcoming demos (--past, --all)
   demo        show a demo, add to its journal, set its outcome, cancel it, log a past one
+  debriefs    demos waiting for a debrief, ratings, outcomes, top gaps and competitors
+  debrief     write or update the debrief of a demo that is done
+  gaps        the gaps board: list, show, set, merge, export as Markdown or CSV
   init        scaffold a workspace with the bundled example environment
   version     print the version
 
@@ -133,6 +136,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return c.demoList(cargs)
 	case "demo":
 		return c.demo(cargs)
+	case "debriefs":
+		return c.debriefs(cargs)
+	case "debrief":
+		return c.debrief(cargs)
+	case "gaps":
+		return c.gaps(cargs)
 	}
 	fmt.Fprintf(stderr, "unknown command %q\n\n%s", cmd, usage)
 	return 3

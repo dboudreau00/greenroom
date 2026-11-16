@@ -64,6 +64,12 @@ const (
 	MaxNextStep  = 500
 	MaxEntryText = 4000
 	MaxEntries   = 500
+
+	MaxDebriefText = 4000
+	MaxCompetitor  = 60
+	MaxCompetitors = 10
+	MaxGapRefs     = 20
+	MaxGapDetail   = 1000
 )
 
 // DefaultStage is the stage of a demo booked without one.
@@ -103,14 +109,43 @@ type Demo struct {
 	CheckRunID string          `json:"checkRunId,omitempty"`
 	// CleanupRunID is the reset to the pin after the demo, when resetAfter
 	// is set; Cleanup says where that stands.
-	CleanupRunID string    `json:"cleanupRunId,omitempty"`
-	Cleanup      string    `json:"cleanup,omitempty"`
-	Readiness    string    `json:"readiness,omitempty"`
-	Error        string    `json:"error,omitempty"`
-	Journal      []Entry   `json:"journal"`
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
-	CreatedBy    string    `json:"createdBy,omitempty"`
+	CleanupRunID string  `json:"cleanupRunId,omitempty"`
+	Cleanup      string  `json:"cleanup,omitempty"`
+	Readiness    string  `json:"readiness,omitempty"`
+	Error        string  `json:"error,omitempty"`
+	Journal      []Entry `json:"journal"`
+	// Debrief is what the sales engineer wrote after the demo; one per demo.
+	Debrief   *Debrief  `json:"debrief,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+	CreatedBy string    `json:"createdBy,omitempty"`
+}
+
+// Debrief is the structured look back at a demo: what landed, what fell
+// flat, what broke, and the gaps the prospect asked about. Gaps point at the
+// workspace gap registry; the debrief is the only place mentions are kept.
+type Debrief struct {
+	Rating           int       `json:"rating"`
+	Highlights       string    `json:"highlights,omitempty"`
+	Lowlights        string    `json:"lowlights,omitempty"`
+	EnvironmentNotes string    `json:"environmentNotes,omitempty"`
+	Competitors      []string  `json:"competitors"`
+	NextSteps        string    `json:"nextSteps,omitempty"`
+	Outcome          string    `json:"outcome,omitempty"`
+	Gaps             []GapRef  `json:"gaps"`
+	SubmittedBy      string    `json:"submittedBy,omitempty"`
+	SubmittedAt      time.Time `json:"submittedAt"`
+	UpdatedBy        string    `json:"updatedBy,omitempty"`
+	UpdatedAt        time.Time `json:"updatedAt"`
+}
+
+// GapRef is one gap a debrief mentions, with how much it mattered to this
+// prospect and what exactly they asked.
+type GapRef struct {
+	GapID    string `json:"gapId"`
+	Severity string `json:"severity"`
+	Detail   string `json:"detail,omitempty"`
+	Quote    string `json:"quote,omitempty"`
 }
 
 // SetID is the seed set reference, persona@vN.
@@ -178,13 +213,14 @@ type Brief struct {
 	NextStep     string    `json:"nextStep,omitempty"`
 	Readiness    string    `json:"readiness,omitempty"`
 	JournalCount int       `json:"journalCount"`
+	Debriefed    bool      `json:"debriefed"`
 }
 
 // Brief returns the short form.
 func (d *Demo) Brief() Brief {
 	return Brief{ID: d.ID, Title: d.Title, Env: d.Env, Prospect: d.Prospect, Brand: d.Brand, Persona: d.Persona, Version: d.Version,
 		Owner: d.Owner, Booked: d.Booked, Start: d.Start, End: d.End, Status: d.Status, Stage: d.Stage, Outcome: d.Outcome,
-		NextStep: d.NextStep, Readiness: d.Readiness, JournalCount: len(d.Journal)}
+		NextStep: d.NextStep, Readiness: d.Readiness, JournalCount: len(d.Journal), Debriefed: d.Debrief != nil}
 }
 
 // ErrNotFound is returned for an unknown demo or journal entry.
@@ -265,6 +301,14 @@ func normalize(d *Demo) {
 	}
 	if d.Journal == nil {
 		d.Journal = []Entry{}
+	}
+	if db := d.Debrief; db != nil {
+		if db.Competitors == nil {
+			db.Competitors = []string{}
+		}
+		if db.Gaps == nil {
+			db.Gaps = []GapRef{}
+		}
 	}
 }
 

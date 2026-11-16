@@ -86,6 +86,7 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/v1/environments/{env}/runs/{id}/events", s.auth(s.runEvents))
 	s.brandRoutes()
 	s.demoRoutes()
+	s.debriefRoutes()
 }
 
 func (s *Server) withHeaders(next http.Handler) http.Handler {
@@ -291,6 +292,11 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 		"environmentsDir": s.eng.Workspace().EnvironmentsDir, "probeInterval": s.eng.Workspace().ProbeInterval.D().String()}
 	if err := s.eng.LoadError(); err != nil {
 		out["loadError"] = err.Error()
+	}
+	if since, err := engine.ParseSince("", s.eng.Now()); err == nil {
+		if n, err := s.eng.PendingDebriefs(since); err == nil {
+			out["debriefsPending"] = n
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }

@@ -7,7 +7,8 @@ internal/seeds           seed set discovery, manifest validation, content hashin
 internal/templates       built-in and workspace templates, module resolution, rendering
 internal/brand           brand kits: page extraction, image typing and SVG checks, placeholder rendering
 internal/webfetch        the guarded HTTP client for links people paste (public addresses only)
-internal/demos           demo records and their journal (files), text cleaning, the iCalendar export
+internal/demos           demo records, their journal and debrief (files), text cleaning, the iCalendar export
+internal/gaps            gap registry (files), scores from mentions, title suggestions, Markdown and CSV export
 internal/state           applied record, uptime samples, runs, snapshots, heal events (files)
 internal/targets         Executor / Copier / Pinger contracts and helpers
   docker/                Docker Engine API over unix, npipe or tcp, exec with hijacked stream
@@ -19,7 +20,7 @@ internal/targets         Executor / Copier / Pinger contracts and helpers
 internal/registry        turns target blocks into clients, once per environment
 internal/sqlrun          SQL runner: pgx / mysql driver, or psql / mysql CLI through an executor
 internal/probe           one probe per dependency kind, returns Result with fingerprint
-internal/engine          check, stale, reset, snapshot, heal, scheduler, demo booking, run recording, views
+internal/engine          check, stale, reset, snapshot, heal, scheduler, demo booking, debriefs and gaps, run recording, views
 internal/server          JSON API, SSE, auth, embedded UI
 internal/ui              index.html, app.js, style.css (no build step)
 internal/example         embedded acme-demo used by "greenroom init"
@@ -68,6 +69,16 @@ environment is retried on the next pass. `StartReset`, `Reset`,
 error wrapping `engine.ErrBooked` while a booked demo is on stage, unless
 the caller overrides; the override is written to the demo's journal.
 
+**Debriefs and gaps.** `engine.SaveDebrief` validates the whole debrief,
+checks every linked gap id against `state/_gaps`, creates the new gaps,
+then writes the debrief into the demo file under the demo store's lock
+(removing the new gaps again if that write fails). Mentions are never
+stored: `GapBoard`, `GapDetail`, `Debriefs` and `ExportGaps` read every
+demo file, follow `mergedInto` on each reference, and hand the mentions to
+`gaps.Rows`, which scores each gap by the highest severity per distinct
+prospect. `MergeGap` marks the source merged first and then rewrites the
+references in each debrief, so a half-done merge still reads correctly.
+
 ## Executors
 
 Everything that runs somewhere goes through `targets.Executor`:
@@ -100,14 +111,16 @@ state/_brands/<slug>/
   brand.json          brand kit: name, tagline, colors, asset list
   <asset>.<ext>       logo, icon and other images, typed by content
 state/_demos/
-  <id>.json           one demo: slot, seed set, brand, status, run ids, journal
+  <id>.json           one demo: slot, seed set, brand, status, run ids, journal, debrief
+state/_gaps/
+  <id>.json           one gap: title, kind, status, owner, notes, environment and module, merge
 ```
 
 Writes are atomic (temp file plus rename). The CLI and the portal can share
 a state directory; a reset holds a per-environment lock inside one process,
-and the applied record is only written on success. `_brands` and `_demos`
-can not collide with an environment, whose names start with a letter or
-digit.
+and the applied record is only written on success. `_brands`, `_demos`
+and `_gaps` can not collide with an environment, whose names start with a
+letter or digit.
 
 ## Why no external dependencies beyond two SQL drivers
 
